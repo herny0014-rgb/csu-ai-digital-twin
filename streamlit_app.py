@@ -3,10 +3,13 @@ import csv
 import io
 import math
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import streamlit as st
 import streamlit.components.v1 as components
+
+
+KST = timezone(timedelta(hours=9), name="KST")
 
 
 st.set_page_config(
@@ -988,7 +991,9 @@ def make_training_record(excellent: bool = False) -> dict[str, object]:
     live_hopper = max(0.0, hopper_load + wave * 0.35) if running else 0.0
 
     return {
-        "기록시각": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "기록시각": datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"),
+        "데이터출처": "디지털 트윈 자동기록",
+        "조업일자": datetime.now(KST).strftime("%Y-%m-%d"),
         "화물브랜드": cargo_brand or "미입력",
         "운전모드": mode,
         "조업상태": "조업 중" if running else "조업 정지",
@@ -1023,11 +1028,198 @@ def records_to_csv(records: list[dict[str, object]]) -> bytes:
     """엑셀에서 한글이 깨지지 않는 UTF-8 BOM CSV를 만든다."""
     if not records:
         return b""
+    fieldnames: list[str] = []
+    seen: set[str] = set()
+    for record in records:
+        for field in record:
+            if field not in seen:
+                fieldnames.append(field)
+                seen.add(field)
     buffer = io.StringIO(newline="")
-    writer = csv.DictWriter(buffer, fieldnames=list(records[0].keys()))
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
     writer.writeheader()
     writer.writerows(records)
     return ("\ufeff" + buffer.getvalue()).encode("utf-8")
+
+
+def render_company_operation_entry() -> None:
+    """회사에서 측정한 실제 조업 결과를 학습자료로 추가한다."""
+    with st.expander("🏭 회사 실제 운전 데이터 입력", expanded=True):
+        st.caption(
+            "실제 계측값을 아는 항목만 입력하고, 확인하지 못한 값은 0으로 두면 됩니다. "
+            "저장한 자료는 아래 AI 학습 데이터 CSV에 함께 포함됩니다."
+        )
+
+        with st.form("company_operation_form", clear_on_submit=False):
+            basic_1, basic_2, basic_3, basic_4 = st.columns(4)
+            with basic_1:
+                actual_date = st.date_input(
+                    "조업일자",
+                    value=datetime.now(KST).date(),
+                )
+            with basic_2:
+                actual_csu = st.selectbox("CSU 호기", ["CSU 1호기", "CSU 2호기"])
+            with basic_3:
+                actual_shift = st.selectbox("근무 구분", ["주간", "야간"])
+            with basic_4:
+                actual_brand = st.text_input(
+                    "화물 브랜드",
+                    value="",
+                    placeholder="예: POYA",
+                )
+
+            result_1, result_2, result_3, result_4 = st.columns(4)
+            with result_1:
+                scheduled_hours = st.number_input(
+                    "계획 작업시간 (h)", 1.0, 24.0, 12.0, 0.5
+                )
+            with result_2:
+                downtime_minutes = st.number_input(
+                    "라인 정지시간 (분)", 0, 1_440, 0, 5
+                )
+            with result_3:
+                stop_count = st.number_input("라인 정지 횟수", 0, 100, 0, 1)
+            with result_4:
+                actual_tons = st.number_input(
+                    "실제 하역량 (t)", 0.0, 100_000.0, 0.0, 100.0
+                )
+
+            stop_1, stop_2, stop_3 = st.columns([1.4, 1.0, 1.0])
+            with stop_1:
+                stop_reason = st.selectbox(
+                    "주요 정지 사유",
+                    [
+                        "정지 없음",
+                        "컨베이어 사행",
+                        "편적",
+                        "과부하",
+                        "막힘",
+                        "설비 고장",
+                        "선박 사정",
+                        "작업 대기",
+                        "기타",
+                    ],
+                )
+            with stop_2:
+                actual_risk = st.number_input("최대 사행 위험도 (%)", 0, 100, 0, 1)
+            with stop_3:
+                actual_excellent = st.checkbox("우수 운전 사례")
+
+            st.markdown("##### BE DRIVE 실제 계측값")
+            be_1, be_2, be_3, be_4 = st.columns(4)
+            with be_1:
+                actual_bucket_speed = st.number_input("버켓 속도 (%)", 0.0, 100.0, 0.0, 1.0)
+            with be_2:
+                actual_be_current = st.number_input("BE 전류 (A)", 0.0, 5_000.0, 0.0, 1.0)
+            with be_3:
+                actual_be_load = st.number_input("BE 모터 부하 (%)", 0.0, 100.0, 0.0, 1.0)
+            with be_4:
+                actual_be_torque = st.number_input("BE 토크 (%)", 0.0, 100.0, 0.0, 1.0)
+
+            st.markdown("##### 호퍼 및 컨베이어 실제 계측값")
+            line_1, line_2, line_3, line_4 = st.columns(4)
+            with line_1:
+                actual_hopper = st.number_input("호퍼 로드셀 (t)", 0.0, 100.0, 0.0, 0.5)
+            with line_2:
+                actual_boom_speed = st.number_input("BOOM BC 속도 (%)", 0.0, 100.0, 0.0, 1.0)
+            with line_3:
+                actual_boom_load = st.number_input("BOOM BC 부하 (%)", 0.0, 100.0, 0.0, 1.0)
+            with line_4:
+                actual_boom_torque = st.number_input("BOOM BC 토크 (%)", 0.0, 100.0, 0.0, 1.0)
+
+            line_5, line_6, line_7 = st.columns(3)
+            with line_5:
+                actual_feeder_speed = st.number_input("FEEDER BC 속도 (%)", 0.0, 100.0, 0.0, 1.0)
+            with line_6:
+                actual_feeder_load = st.number_input("FEEDER BC 부하 (%)", 0.0, 100.0, 0.0, 1.0)
+            with line_7:
+                actual_feeder_torque = st.number_input("FEEDER BC 토크 (%)", 0.0, 100.0, 0.0, 1.0)
+
+            line_8, line_9, line_10 = st.columns(3)
+            with line_8:
+                actual_gantry_speed = st.number_input("GANTRY BC 속도 (%)", 0.0, 100.0, 0.0, 1.0)
+            with line_9:
+                actual_gantry_load = st.number_input("GANTRY BC 부하 (%)", 0.0, 100.0, 0.0, 1.0)
+            with line_10:
+                actual_gantry_torque = st.number_input("GANTRY BC 토크 (%)", 0.0, 100.0, 0.0, 1.0)
+
+            actual_note = st.text_area(
+                "운전 특이사항",
+                placeholder="예: A801 사행 경보로 25분 정지 후 벨트 속도 조정",
+            )
+            save_actual = st.form_submit_button(
+                "실제 운전 데이터 학습자료로 저장",
+                use_container_width=True,
+            )
+
+        if save_actual:
+            effective_hours = max(0.0, scheduled_hours - downtime_minutes / 60.0)
+            gross_rate = actual_tons / scheduled_hours if scheduled_hours > 0 else 0.0
+            net_rate = actual_tons / effective_hours if effective_hours > 0 else 0.0
+            availability = effective_hours / scheduled_hours * 100 if scheduled_hours > 0 else 0.0
+            normalized_brand = actual_brand.strip() or "미입력"
+            matched_brand = next(
+                (
+                    name
+                    for name in BRAND_UNLOADING_STATS
+                    if name.casefold() == normalized_brand.casefold()
+                ),
+                None,
+            )
+            actual_brand_daily = (
+                BRAND_UNLOADING_STATS[matched_brand][1]
+                if matched_brand
+                else OVERALL_AVERAGE_DAILY_RATE
+            )
+
+            actual_record = {
+                "기록시각": datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"),
+                "데이터출처": "회사 실제 운전 입력",
+                "조업일자": actual_date.strftime("%Y-%m-%d"),
+                "CSU호기": actual_csu,
+                "근무구분": actual_shift,
+                "화물브랜드": normalized_brand,
+                "운전모드": "실제 조업",
+                "조업상태": "근무 실적 저장",
+                "우수운전": "Y" if actual_excellent else "N",
+                "계획작업시간_h": round(scheduled_hours, 2),
+                "라인정지시간_min": downtime_minutes,
+                "라인정지횟수": stop_count,
+                "주요정지사유": stop_reason,
+                "실가동시간_h": round(effective_hours, 2),
+                "설비가동률_pct": round(availability, 1),
+                "근무시간기준하역률_tph": round(gross_rate, 1),
+                "실가동기준하역률_tph": round(net_rate, 1),
+                "버켓속도_pct": actual_bucket_speed,
+                "BE전류_A": actual_be_current,
+                "BE모터부하_pct": actual_be_load,
+                "BE토크_pct": actual_be_torque,
+                "BOOM_BC속도_pct": actual_boom_speed,
+                "BOOM_BC모터부하_pct": actual_boom_load,
+                "BOOM_BC토크_pct": actual_boom_torque,
+                "FEEDER_BC속도_pct": actual_feeder_speed,
+                "FEEDER_BC모터부하_pct": actual_feeder_load,
+                "FEEDER_BC토크_pct": actual_feeder_torque,
+                "GANTRY_BC속도_pct": actual_gantry_speed,
+                "GANTRY_BC모터부하_pct": actual_gantry_load,
+                "GANTRY_BC토크_pct": actual_gantry_torque,
+                "호퍼로드셀_t": actual_hopper,
+                "실시간하역량_tph": round(net_rate, 1),
+                "브랜드기준하역량_12h_t": round(actual_brand_daily / REFERENCE_CSU_COUNT, 1),
+                "실제누적하역량_t": round(actual_tons, 1),
+                "사행감지신호_pct": actual_risk,
+                "사행위험도_pct": actual_risk,
+                "사행위험등급": "위험" if actual_risk >= 80 else "주의" if actual_risk >= 55 else "정상",
+                "AI예방조치": "실제 운전자료 분석 대기",
+                "AI판단": "회사 실제 운전 데이터",
+                "운전특이사항": actual_note.strip(),
+            }
+            st.session_state.training_records.append(actual_record)
+            st.success(
+                f"실제 운전자료를 저장했습니다 · {normalized_brand} · "
+                f"{actual_tons:,.0f}톤 · 가동률 {availability:.1f}% · "
+                f"실가동 하역률 {net_rate:,.0f} t/h"
+            )
 
 
 @st.fragment(run_every=5)
@@ -1081,13 +1273,14 @@ def render_training_recorder() -> None:
     st.download_button(
         "⬇ AI 학습 데이터 CSV 다운로드",
         data=records_to_csv(st.session_state.training_records),
-        file_name=f"CSU_AI_학습데이터_{datetime.now():%Y%m%d_%H%M}.csv",
+        file_name=f"CSU_AI_학습데이터_{datetime.now(KST):%Y%m%d_%H%M}.csv",
         mime="text/csv",
         use_container_width=True,
         disabled=record_count == 0,
     )
 
 
+render_company_operation_entry()
 render_training_recorder()
 
 st.caption(
