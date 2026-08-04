@@ -132,6 +132,9 @@ BRAND_UNLOADING_STATS = {
     "TontoutaOuinne": (62_421, 10_836),
 }
 OVERALL_AVERAGE_DAILY_RATE = 19_114
+REFERENCE_CSU_COUNT = 2
+EFFECTIVE_OPERATING_HOURS_PER_DAY = 12.0
+UNLOADING_RATE_CALIBRATION_FACTOR = 0.42
 
 brand_col, brand_input_col, brand_info_col = st.columns([1.4, 1.4, 3.2])
 with brand_col:
@@ -154,16 +157,20 @@ brand_total_tons, brand_reference_daily = BRAND_UNLOADING_STATS.get(
     (0, OVERALL_AVERAGE_DAILY_RATE),
 )
 brand_reference_hourly = brand_reference_daily / 24
+brand_reference_per_csu = brand_reference_daily / REFERENCE_CSU_COUNT
 brand_performance_factor = brand_reference_daily / OVERALL_AVERAGE_DAILY_RATE
 
 with brand_info_col:
     if selected_brand == "직접 입력":
-        st.info("직접 입력 브랜드는 전체 평균 19,114 T/D를 기준으로 계산합니다.")
+        st.info(
+            "직접 입력 브랜드는 전체 평균 19,114 T/D, "
+            "CSU 1대 12시간 기준 9,557톤으로 계산합니다."
+        )
     else:
         st.info(
             f"최근 2년 실적 · 총 {brand_total_tons:,}t · "
-            f"평균 {brand_reference_daily:,} T/D "
-            f"({brand_reference_hourly:,.0f} t/h)"
+            f"24h 기준 {brand_reference_daily:,} T/D · "
+            f"CSU 1대 12h 기준 {brand_reference_per_csu:,.0f}톤"
         )
 
 st.markdown("#### 컨베이어 벨트 속도 제어")
@@ -226,7 +233,10 @@ if mode == "AI 자동":
         f"{boom_speed}/{feeder_speed}/{gantry_speed}%"
     )
     if selected_brand != "직접 입력":
-        ai_decision += f" · {selected_brand} 기준 {brand_reference_daily:,} T/D 반영"
+        ai_decision += (
+            f" · {selected_brand} CSU 1대 12h 기준 "
+            f"{brand_reference_per_csu:,.0f}톤 반영"
+        )
 else:
     digging_depth = manual_digging_depth
     bucket_speed = manual_speed
@@ -280,6 +290,7 @@ if running:
         * bucket_speed
         * feeder_discharge_coefficient
         * brand_performance_factor
+        * UNLOADING_RATE_CALIBRATION_FACTOR
         if conveyor_line_ready else 0.0
     )
     motor_load = min(100.0, 16 + bucket_speed * 0.66 + material_supply * 0.14)
@@ -317,7 +328,11 @@ elif flushing:
         * remaining_ratio,
     )
     unloading = (
-        hopper_load * feeder_speed * 0.72 * brand_performance_factor
+        hopper_load
+        * feeder_speed
+        * 0.72
+        * brand_performance_factor
+        * UNLOADING_RATE_CALIBRATION_FACTOR
         if boom_speed > 0 and feeder_speed > 0 and gantry_speed > 0
         else 0.0
     )
@@ -343,7 +358,7 @@ else:
     loadcell_status = "로드셀 대기"
 
 estimated_hours = ship_cargo / unloading if unloading > 0 else 0.0
-daily_unloading = unloading * 24
+daily_unloading = unloading * EFFECTIVE_OPERATING_HOURS_PER_DAY
 
 # 직전 화면 갱신 이후의 하역량을 누적한다. 정지 후에도 누적값은 유지된다.
 accumulation_now = time.time()
@@ -439,6 +454,9 @@ const baseBucket={bucket_speed}, baseDepth={digging_depth};
 const baseBoom={boom_speed}, baseFeeder={feeder_speed};
 const baseGantry={gantry_speed}, supply={material_supply};
 const brandFactor={brand_performance_factor:.6f};
+const rateCalibration={UNLOADING_RATE_CALIBRATION_FACTOR:.6f};
+const effectiveHours={EFFECTIVE_OPERATING_HOURS_PER_DAY:.1f};
+const rateLimit={brand_reference_hourly * 1.08:.6f};
 let actualTons={actual_unloaded:.6f}, previousTick=Date.now();
 function clamp(v,a,b){{return Math.max(a,Math.min(b,v));}}
 function update(){{
@@ -453,15 +471,15 @@ function update(){{
  let feeder=Math.round(clamp(baseFeeder+lw*3,35,100));
  const gantry=Math.round(clamp(baseGantry+(sw+lw)*1.5,35,100));
  let hopper=Math.min(50,fill*.43+bucket*.045-(feeder-baseFeeder)*.08);
- let rate=hopper*bucket*.86*(feeder/Math.max(1,baseFeeder))*brandFactor;
- let overLimit=rate>2400;
+ let rate=hopper*bucket*.86*(feeder/Math.max(1,baseFeeder))*brandFactor*rateCalibration;
+ let overLimit=rate>rateLimit;
  if(overLimit){{
    bucket=Math.max(30,bucket-4);
    depth=Math.max(20,depth-6);
    fill=Math.round(clamp(18+depth*.92-bucket*.08,15,100));
    feeder=Math.min(100,feeder+2);
    hopper=Math.min(50,fill*.43+bucket*.045-(feeder-baseFeeder)*.08);
-   rate=hopper*bucket*.86*(feeder/Math.max(1,baseFeeder))*brandFactor;
+   rate=hopper*bucket*.86*(feeder/Math.max(1,baseFeeder))*brandFactor*rateCalibration;
  }}
  const load=Math.min(100,16+bucket*.66+fill*.14);
  let reason="부하 안정 → 최적 하역량 유지";
@@ -476,7 +494,7 @@ function update(){{
  document.getElementById("feeder").textContent=feeder+" %";
  document.getElementById("gantry").textContent=gantry+" %";
  document.getElementById("rate").textContent=Math.round(rate).toLocaleString()+" t/h";
- document.getElementById("dayrate").textContent=Math.round(rate*24).toLocaleString()+" t/day";
+ document.getElementById("dayrate").textContent=Math.round(rate*effectiveHours).toLocaleString()+" t/day";
  actualTons+=rate*elapsedSeconds/3600;
  document.getElementById("actualrate").textContent=actualTons.toFixed(1)+" t";
  const decision=document.getElementById("decision");
@@ -589,7 +607,7 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
 <div class="panel left">
   <div class="k">운전 모드</div><div class="v">{safe_mode}</div>
   <div class="k">화물 브랜드</div><div class="v">{safe_cargo_brand}</div>
-  <div class="k">브랜드 기준 일 하역률</div><div class="v">{brand_reference_daily:,.0f} T/D</div>
+  <div class="k">브랜드 기준 하역량 (CSU 1대·12h)</div><div class="v">{brand_reference_per_csu:,.0f} t</div>
   <div class="k">선박 적재 화물량</div><div class="v">{ship_cargo:,.0f} t</div>
   <div class="k">하역량</div><div class="v" id="scene-rate">{unloading:,.0f} t/h</div>
   <div class="k">예상 일 하역량</div><div class="v" id="scene-dayrate">{daily_unloading:,.0f} t/day</div>
@@ -729,6 +747,7 @@ let sceneActual={actual_unloaded:.6f};
 let scenePrevious=Date.now();
 const sceneBaseRate={unloading:.6f};
 const sceneManual={str(mode == "수동" and running).lower()};
+const sceneEffectiveHours={EFFECTIVE_OPERATING_HOURS_PER_DAY:.1f};
 window.setInterval(()=>{{
  const now=Date.now();
  const seconds=Math.max(0,(now-scenePrevious)/1000);
@@ -738,7 +757,7 @@ window.setInterval(()=>{{
  sceneActual+=sceneRate*seconds/3600;
  const value=sceneActual.toFixed(1)+" t";
  const rateValue=Math.round(sceneRate).toLocaleString()+" t/h";
- const dayValue=Math.round(sceneRate*24).toLocaleString()+" t/day";
+ const dayValue=Math.round(sceneRate*sceneEffectiveHours).toLocaleString()+" t/day";
  const left=document.getElementById("actual-unloaded");
  const bottom=document.getElementById("actual-bottom");
  const leftRate=document.getElementById("scene-rate");
@@ -801,7 +820,10 @@ background:linear-gradient(180deg,#0a263a,#061827)}}
 <script>
 const bb={bucket_speed},bd={digging_depth},bo={boom_speed},fe={feeder_speed},ga={gantry_speed};
 const brandFactor={brand_performance_factor:.6f};
+const rateCalibration={UNLOADING_RATE_CALIBRATION_FACTOR:.6f};
 const aiMode={str(mode == "AI 자동").lower()};
+const effectiveHours={EFFECTIVE_OPERATING_HOURS_PER_DAY:.1f};
+const rateLimit={brand_reference_hourly * 1.08:.6f};
 const C=(v,a,b)=>Math.max(a,Math.min(b,v)), put=(id,v)=>document.getElementById(id).textContent=v;
 let accumulated={actual_unloaded:.6f},previous=Date.now();
 function tick(){{
@@ -814,20 +836,20 @@ function tick(){{
  let depth=aiMode?Math.round(C(bd-lw*5,20,95)):bd;
  let fill=Math.round(C(18+depth*.92-b*.08,15,100));
  let hp=Math.min(50,fill*.43+b*.045-(fs-fe)*.08);
- let u=hp*b*.86*(fs/Math.max(1,fe))*brandFactor;
+ let u=hp*b*.86*(fs/Math.max(1,fe))*brandFactor*rateCalibration;
  if(!aiMode) u*=1+sw*.025+lw*.012;
- if(aiMode && u>2400){{
+ if(aiMode && u>rateLimit){{
    b=Math.max(30,b-4);depth=Math.max(20,depth-6);
    fill=Math.round(C(18+depth*.92-b*.08,15,100));fs=Math.min(100,fs+2);
    hp=Math.min(50,fill*.43+b*.045-(fs-fe)*.08);
-   u=hp*b*.86*(fs/Math.max(1,fe))*brandFactor;
+   u=hp*b*.86*(fs/Math.max(1,fe))*brandFactor*rateCalibration;
  }}
  const bl=Math.min(100,16+b*.66+fill*.14),bt=Math.min(100,14+b*.58+fill*.18);
  const bml=Math.min(100,7+bs*.42+u/900),bmt=Math.min(100,6+bs*.35);
  const fml=Math.min(100,10+fs*.48+hp*.40),fmt=Math.min(100,8+fs*.40+hp*.50);
  const gml=Math.min(100,7+gs*.42),gmt=Math.min(100,6+gs*.35);
  accumulated+=u*elapsed/3600;
- put("u",Math.round(u).toLocaleString()+" t/h");put("ud",Math.round(u*24).toLocaleString()+" t/day");
+ put("u",Math.round(u).toLocaleString()+" t/h");put("ud",Math.round(u*effectiveHours).toLocaleString()+" t/day");
  put("ua",accumulated.toFixed(1)+" t");
  put("bl",bl.toFixed(1)+" %");
  put("bt",bt.toFixed(1)+" %");put("hp",hp.toFixed(1)+" t");
