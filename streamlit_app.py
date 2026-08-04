@@ -197,6 +197,15 @@ with gantry_col:
         "GANTRY BC 벨트 속도 (%)", 0, 100, 80, disabled=(mode == "AI 자동")
     )
 
+st.markdown("#### 사행·편적 감지 조건")
+misalignment_signal = st.slider(
+    "사행·편적 감지 신호 (%)",
+    0,
+    100,
+    15,
+    help="현재는 데모 입력값이며, 실제 적용 시 좌·우 사행센서와 편적 계측값으로 대체합니다.",
+)
+
 
 def calculate_ai_speed(material: int) -> tuple[int, str]:
     """Demo controller using simulated load, torque, and hopper feedback."""
@@ -257,6 +266,57 @@ else:
     feeder_speed = manual_feeder_speed
     gantry_speed = manual_gantry_speed
     ai_decision = "작업자 설정 속도로 운전"
+
+# 사행 위험도는 감지 신호, 버켓 적재율, 컨베이어 간 속도 편차를 함께 반영한다.
+speed_imbalance = abs(boom_speed - feeder_speed) + abs(feeder_speed - gantry_speed)
+misalignment_risk = int(
+    max(
+        0,
+        min(
+            100,
+            misalignment_signal * 0.80
+            + speed_imbalance * 0.85
+            + max(0, bucket_fill_rate - 72) * 0.65,
+        ),
+    )
+)
+
+if misalignment_risk >= 80:
+    misalignment_level = "위험"
+elif misalignment_risk >= 55:
+    misalignment_level = "주의"
+else:
+    misalignment_level = "정상"
+
+preventive_action = "현재 속도 유지"
+if mode == "AI 자동" and misalignment_risk >= 80:
+    bucket_speed = max(25, bucket_speed - 12)
+    boom_speed = max(25, boom_speed - 8)
+    feeder_speed = max(25, feeder_speed - 10)
+    gantry_speed = max(25, gantry_speed - 8)
+    preventive_action = "투입량 급감속 · 전 BC 감속 · 안전 인터록 대기"
+    ai_decision += (
+        f" · 사행 위험 {misalignment_risk}% → 예방제어 "
+        f"{bucket_speed}/{boom_speed}/{feeder_speed}/{gantry_speed}%"
+    )
+elif mode == "AI 자동" and misalignment_risk >= 55:
+    bucket_speed = max(30, bucket_speed - 6)
+    boom_speed = max(30, boom_speed - 4)
+    feeder_speed = max(30, feeder_speed - 6)
+    gantry_speed = max(30, gantry_speed - 4)
+    preventive_action = "버켓 투입량 감소 · 컨베이어 단계 감속"
+    ai_decision += (
+        f" · 사행 주의 {misalignment_risk}% → 예방 감속 "
+        f"{bucket_speed}/{boom_speed}/{feeder_speed}/{gantry_speed}%"
+    )
+elif mode == "수동" and misalignment_risk >= 55:
+    preventive_action = "작업자 확인 및 감속 권고"
+
+if mode == "AI 자동" and misalignment_risk >= 55:
+    bucket_fill_rate = int(
+        max(15, min(100, 18 + digging_depth * 0.92 - bucket_speed * 0.08))
+    )
+    material_supply = bucket_fill_rate
 
 if "previous_bucket_speed" not in st.session_state:
     st.session_state.previous_bucket_speed = bucket_speed
@@ -521,6 +581,24 @@ update(); window.setInterval(update,1000);
 
 
 render_ai_live_control()
+
+
+st.subheader("⚠️ 사행·편적 AI 예방감시")
+risk_1, risk_2, risk_3, risk_4 = st.columns(4)
+risk_1.metric("사행 위험도", f"{misalignment_risk} %")
+risk_2.metric("위험 등급", misalignment_level)
+risk_3.metric("감지 신호", f"{misalignment_signal} %")
+risk_4.metric("AI 예방조치", preventive_action)
+
+if misalignment_level == "위험":
+    st.error(
+        f"🔴 사행 위험 {misalignment_risk}% · {preventive_action} · "
+        "현장 안전 인터록과 운전자 확인이 우선입니다."
+    )
+elif misalignment_level == "주의":
+    st.warning(f"🟡 사행 주의 {misalignment_risk}% · {preventive_action}")
+else:
+    st.success(f"🟢 사행 정상 {misalignment_risk}% · 편적 상태 안정")
 
 
 animation_state = "running" if running else "paused"
@@ -933,6 +1011,10 @@ def make_training_record(excellent: bool = False) -> dict[str, object]:
         "실시간하역량_tph": round(live_rate, 1),
         "브랜드기준하역량_12h_t": round(brand_reference_per_csu, 1),
         "실제누적하역량_t": round(actual_unloaded, 2),
+        "사행감지신호_pct": misalignment_signal,
+        "사행위험도_pct": misalignment_risk,
+        "사행위험등급": misalignment_level,
+        "AI예방조치": preventive_action,
         "AI판단": ai_decision,
     }
 
