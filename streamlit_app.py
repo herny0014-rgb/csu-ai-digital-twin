@@ -33,12 +33,6 @@ if "recording_enabled" not in st.session_state:
     st.session_state.recording_enabled = False
 if "last_record_time" not in st.session_state:
     st.session_state.last_record_time = 0.0
-if "company_live_recording" not in st.session_state:
-    st.session_state.company_live_recording = False
-if "company_live_template" not in st.session_state:
-    st.session_state.company_live_template = None
-if "company_last_record_time" not in st.session_state:
-    st.session_state.company_last_record_time = 0.0
 
 
 st.markdown(
@@ -1053,7 +1047,8 @@ def render_company_operation_entry() -> None:
     with st.expander("🏭 회사 실제 운전 데이터 입력", expanded=True):
         st.caption(
             "실제 계측값을 아는 항목만 입력하고, 확인하지 못한 값은 0으로 두면 됩니다. "
-            "저장한 자료는 아래 AI 학습 데이터 CSV에 함께 포함됩니다."
+            "CSU 1호기를 저장한 뒤 2호기를 선택해 다시 저장하면 두 호기 자료가 각각 누적됩니다. "
+            "값이 바뀔 때마다 다시 저장하면 시간순 학습자료가 됩니다."
         )
 
         with st.form("company_operation_form", clear_on_submit=False):
@@ -1064,7 +1059,11 @@ def render_company_operation_entry() -> None:
                     value=datetime.now(KST).date(),
                 )
             with basic_2:
-                actual_csu = st.selectbox("CSU 호기", ["CSU 1호기", "CSU 2호기"])
+                actual_csu = st.radio(
+                    "CSU 호기",
+                    ["CSU 1호기", "CSU 2호기"],
+                    horizontal=True,
+                )
             with basic_3:
                 actual_shift = st.selectbox("근무 구분", ["주간", "야간"])
             with basic_4:
@@ -1090,7 +1089,7 @@ def render_company_operation_entry() -> None:
                     "실제 하역량 (t)", 0.0, 100_000.0, 0.0, 100.0
                 )
 
-            stop_1, stop_2, stop_3 = st.columns([1.4, 1.0, 1.0])
+            stop_1, stop_2 = st.columns([2.0, 1.0])
             with stop_1:
                 stop_reason = st.selectbox(
                     "주요 정지 사유",
@@ -1107,8 +1106,6 @@ def render_company_operation_entry() -> None:
                     ],
                 )
             with stop_2:
-                continuous_actual_recording = st.checkbox("입력값 5초 간격 연속 저장")
-            with stop_3:
                 actual_excellent = st.checkbox("우수 운전 사례")
 
             st.markdown("##### BE DRIVE 실제 계측값")
@@ -1157,6 +1154,11 @@ def render_company_operation_entry() -> None:
                 "입력값 적용 및 실제 운전 데이터 저장",
                 use_container_width=True,
             )
+
+        st.caption(
+            "계측값이 바뀌면 값을 수정한 뒤 다시 저장하세요. "
+            "저장할 때마다 해당 CSU 호기와 저장시각이 별도 행으로 누적됩니다."
+        )
 
         if save_actual:
             effective_hours = max(0.0, scheduled_hours - downtime_minutes / 60.0)
@@ -1218,27 +1220,21 @@ def render_company_operation_entry() -> None:
                 "운전특이사항": actual_note.strip(),
             }
             st.session_state.training_records.append(actual_record)
-            st.session_state.company_live_template = dict(actual_record)
-            st.session_state.company_live_recording = continuous_actual_recording
-            st.session_state.company_last_record_time = time.time()
             st.success(
                 f"실제 운전자료를 저장했습니다 · {normalized_brand} · "
                 f"{actual_tons:,.0f}톤 · 가동률 {availability:.1f}% · "
                 f"실가동 하역률 {net_rate:,.0f} t/h"
             )
-            if continuous_actual_recording:
-                st.info(
-                    "회사 실제 계측값 연속기록을 시작했습니다. "
-                    "값이 바뀌면 수정한 뒤 다시 적용하면 다음 기록부터 새 값으로 저장됩니다."
-                )
 
 
 @st.fragment(run_every=5)
 def render_training_recorder() -> None:
     st.subheader("🧠 AI 학습용 데이터 수집")
     st.info(
-        "현재 단계는 머신러닝 학습이 아니라 학습자료 수집입니다. "
-        "입력·수집한 값은 임시 세션에 저장되므로 작업 종료 전에 반드시 CSV를 다운로드하세요."
+        "5초 자동 수집은 디지털 트윈의 버켓·컨베이어 속도, 모터 부하·토크, "
+        "호퍼 로드셀, 하역량, 사행 위험도와 AI 판단을 저장합니다. "
+        "회사 실제 계측값은 값이 바뀔 때마다 위 입력 화면에서 저장 버튼을 눌러 기록합니다. "
+        "모든 값은 임시 세션에 저장되므로 작업 종료 전에 반드시 CSV를 다운로드하세요."
     )
     start_record, stop_record, mark_excellent, clear_record = st.columns(4)
 
@@ -1261,9 +1257,6 @@ def render_training_recorder() -> None:
         if st.button("수집 데이터 초기화", use_container_width=True):
             st.session_state.training_records = []
             st.session_state.last_record_time = 0.0
-            st.session_state.company_live_recording = False
-            st.session_state.company_live_template = None
-            st.session_state.company_last_record_time = 0.0
 
     record_now = time.time()
     if (
@@ -1274,41 +1267,24 @@ def render_training_recorder() -> None:
         st.session_state.training_records.append(make_training_record())
         st.session_state.last_record_time = record_now
 
-    if (
-        st.session_state.company_live_recording
-        and st.session_state.company_live_template is not None
-        and record_now - st.session_state.company_last_record_time >= 4.5
-    ):
-        company_record = dict(st.session_state.company_live_template)
-        company_record["기록시각"] = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
-        company_record["데이터출처"] = "회사 실제 계측 연속기록"
-        st.session_state.training_records.append(company_record)
-        st.session_state.company_last_record_time = record_now
-
-    if st.session_state.company_live_recording:
-        if st.button(
-            "■ 회사 실제 계측값 연속기록 종료",
-            use_container_width=True,
-        ):
-            st.session_state.company_live_recording = False
-            st.success("회사 실제 계측값 연속기록을 종료했습니다.")
-
     record_count = len(st.session_state.training_records)
     excellent_count = sum(
         row.get("우수운전") == "Y" for row in st.session_state.training_records
     )
     status_text = "수집 중 · 5초 간격 임시 저장" if st.session_state.recording_enabled else "수집 대기"
 
-    company_status = (
-        "실제 계측값 5초 간격 저장 중"
-        if st.session_state.company_live_recording
-        else "실제 계측 대기"
+    csu_1_count = sum(
+        row.get("CSU호기") == "CSU 1호기" for row in st.session_state.training_records
     )
-    info_1, info_2, info_3, info_4 = st.columns(4)
+    csu_2_count = sum(
+        row.get("CSU호기") == "CSU 2호기" for row in st.session_state.training_records
+    )
+    info_1, info_2, info_3, info_4, info_5 = st.columns(5)
     info_1.metric("디지털 트윈 수집", status_text)
-    info_2.metric("회사 실제 계측", company_status)
-    info_3.metric("수집 데이터", f"{record_count:,}건")
-    info_4.metric("우수 운전 사례", f"{excellent_count:,}건")
+    info_2.metric("CSU 1호기 실제자료", f"{csu_1_count:,}건")
+    info_3.metric("CSU 2호기 실제자료", f"{csu_2_count:,}건")
+    info_4.metric("전체 수집 데이터", f"{record_count:,}건")
+    info_5.metric("우수 운전 사례", f"{excellent_count:,}건")
 
     if st.session_state.recording_enabled and not running:
         st.warning("조업 착수 후 데이터 자동 기록이 시작됩니다.")
