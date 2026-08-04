@@ -358,7 +358,9 @@ else:
     loadcell_status = "로드셀 대기"
 
 estimated_hours = ship_cargo / unloading if unloading > 0 else 0.0
-daily_unloading = unloading * EFFECTIVE_OPERATING_HOURS_PER_DAY
+# 최근 2년 브랜드 실적을 CSU 1대·12시간 기준으로 환산한 고정 비교값이다.
+# 현재 운전조건에 따라 변하는 값은 unloading(t/h)만 사용한다.
+daily_unloading = brand_reference_per_csu
 
 # 직전 화면 갱신 이후의 하역량을 누적한다. 정지 후에도 누적값은 유지된다.
 accumulation_now = time.time()
@@ -445,7 +447,7 @@ background:#08372f;color:#75f2ac;font-size:12px;font-weight:750}}
  <div class="card"><div class="name">FEEDER BC</div><div class="value" id="feeder"></div></div>
  <div class="card"><div class="name">GANTRY BC</div><div class="value" id="gantry"></div></div>
  <div class="card"><div class="name">실시간 하역량</div><div class="value" id="rate"></div></div>
- <div class="card"><div class="name">예상 일 하역량</div><div class="value" id="dayrate"></div></div>
+ <div class="card"><div class="name">브랜드 기준 일 하역량</div><div class="value" id="dayrate"></div></div>
  <div class="card"><div class="name">실제 누적 하역량</div><div class="value" id="actualrate"></div></div>
 </div>
 <div class="decision" id="decision"></div>
@@ -455,7 +457,7 @@ const baseBoom={boom_speed}, baseFeeder={feeder_speed};
 const baseGantry={gantry_speed}, supply={material_supply};
 const brandFactor={brand_performance_factor:.6f};
 const rateCalibration={UNLOADING_RATE_CALIBRATION_FACTOR:.6f};
-const effectiveHours={EFFECTIVE_OPERATING_HOURS_PER_DAY:.1f};
+ const fixedDaily={brand_reference_per_csu:.6f};
 const rateLimit={brand_reference_hourly * 1.08:.6f};
 let actualTons={actual_unloaded:.6f}, previousTick=Date.now();
 function clamp(v,a,b){{return Math.max(a,Math.min(b,v));}}
@@ -494,7 +496,7 @@ function update(){{
  document.getElementById("feeder").textContent=feeder+" %";
  document.getElementById("gantry").textContent=gantry+" %";
  document.getElementById("rate").textContent=Math.round(rate).toLocaleString()+" t/h";
- document.getElementById("dayrate").textContent=Math.round(rate*effectiveHours).toLocaleString()+" t/day";
+ document.getElementById("dayrate").textContent=Math.round(fixedDaily).toLocaleString()+" t/day";
  actualTons+=rate*elapsedSeconds/3600;
  document.getElementById("actualrate").textContent=actualTons.toFixed(1)+" t";
  const decision=document.getElementById("decision");
@@ -610,7 +612,7 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
   <div class="k">브랜드 기준 하역량 (CSU 1대·12h)</div><div class="v">{brand_reference_per_csu:,.0f} t</div>
   <div class="k">선박 적재 화물량</div><div class="v">{ship_cargo:,.0f} t</div>
   <div class="k">하역량</div><div class="v" id="scene-rate">{unloading:,.0f} t/h</div>
-  <div class="k">예상 일 하역량</div><div class="v" id="scene-dayrate">{daily_unloading:,.0f} t/day</div>
+  <div class="k">브랜드 기준 일 하역량</div><div class="v" id="scene-dayrate">{daily_unloading:,.0f} t/day</div>
   <div class="k">실제 누적 하역량</div><div class="v" id="actual-unloaded">{actual_unloaded:.1f} t</div>
   <div class="k">예상 하역시간</div><div class="v">{estimated_hours:.1f} h</div>
   <div class="k">호퍼 로드셀</div><div class="v accent">{hopper_load:.1f} t</div>
@@ -738,7 +740,7 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
  <div class="tile"><div class="tn">버켓 토크</div><div class="tv">{bucket_torque:.1f} %</div></div>
  <div class="tile"><div class="tn">호퍼 로드셀</div><div class="tv">{hopper_load:.1f} t</div></div>
  <div class="tile"><div class="tn">하역량</div><div class="tv" id="bottom-rate">{unloading:,.0f} t/h</div></div>
- <div class="tile"><div class="tn">예상 일 하역량</div><div class="tv" id="bottom-dayrate">{daily_unloading:,.0f} t/day</div></div>
+ <div class="tile"><div class="tn">브랜드 기준 일 하역량</div><div class="tv" id="bottom-dayrate">{daily_unloading:,.0f} t/day</div></div>
  <div class="tile"><div class="tn">실제 누적 하역량</div><div class="tv" id="actual-bottom">{actual_unloaded:.1f} t</div></div>
 </div>
 </div>
@@ -747,7 +749,7 @@ let sceneActual={actual_unloaded:.6f};
 let scenePrevious=Date.now();
 const sceneBaseRate={unloading:.6f};
 const sceneManual={str(mode == "수동" and running).lower()};
-const sceneEffectiveHours={EFFECTIVE_OPERATING_HOURS_PER_DAY:.1f};
+const sceneFixedDaily={brand_reference_per_csu:.6f};
 window.setInterval(()=>{{
  const now=Date.now();
  const seconds=Math.max(0,(now-scenePrevious)/1000);
@@ -757,7 +759,7 @@ window.setInterval(()=>{{
  sceneActual+=sceneRate*seconds/3600;
  const value=sceneActual.toFixed(1)+" t";
  const rateValue=Math.round(sceneRate).toLocaleString()+" t/h";
- const dayValue=Math.round(sceneRate*sceneEffectiveHours).toLocaleString()+" t/day";
+ const dayValue=Math.round(sceneFixedDaily).toLocaleString()+" t/day";
  const left=document.getElementById("actual-unloaded");
  const bottom=document.getElementById("actual-bottom");
  const leftRate=document.getElementById("scene-rate");
@@ -795,7 +797,7 @@ background:linear-gradient(180deg,#0a263a,#061827)}}
 <h2>실시간 운전 데이터</h2>
 <div class="grid6">
  <div class="card"><div class="name">하역량</div><div class="value" id="u"></div></div>
- <div class="card"><div class="name">예상 일 하역량</div><div class="value" id="ud"></div></div>
+ <div class="card"><div class="name">브랜드 기준 일 하역량</div><div class="value" id="ud"></div></div>
  <div class="card"><div class="name">실제 누적 하역량</div><div class="value" id="ua"></div></div>
  <div class="card"><div class="name">버켓 모터 부하</div><div class="value" id="bl"></div></div>
  <div class="card"><div class="name">버켓 토크</div><div class="value" id="bt"></div></div>
@@ -822,7 +824,7 @@ const bb={bucket_speed},bd={digging_depth},bo={boom_speed},fe={feeder_speed},ga=
 const brandFactor={brand_performance_factor:.6f};
 const rateCalibration={UNLOADING_RATE_CALIBRATION_FACTOR:.6f};
 const aiMode={str(mode == "AI 자동").lower()};
-const effectiveHours={EFFECTIVE_OPERATING_HOURS_PER_DAY:.1f};
+const fixedDaily={brand_reference_per_csu:.6f};
 const rateLimit={brand_reference_hourly * 1.08:.6f};
 const C=(v,a,b)=>Math.max(a,Math.min(b,v)), put=(id,v)=>document.getElementById(id).textContent=v;
 let accumulated={actual_unloaded:.6f},previous=Date.now();
@@ -849,7 +851,7 @@ function tick(){{
  const fml=Math.min(100,10+fs*.48+hp*.40),fmt=Math.min(100,8+fs*.40+hp*.50);
  const gml=Math.min(100,7+gs*.42),gmt=Math.min(100,6+gs*.35);
  accumulated+=u*elapsed/3600;
- put("u",Math.round(u).toLocaleString()+" t/h");put("ud",Math.round(u*effectiveHours).toLocaleString()+" t/day");
+ put("u",Math.round(u).toLocaleString()+" t/h");put("ud",Math.round(fixedDaily).toLocaleString()+" t/day");
  put("ua",accumulated.toFixed(1)+" t");
  put("bl",bl.toFixed(1)+" %");
  put("bt",bt.toFixed(1)+" %");put("hp",hp.toFixed(1)+" t");
@@ -864,7 +866,7 @@ else:
     st.subheader("실시간 운전 데이터")
     metric_1, metric_2, metric_3, metric_4, metric_5, metric_6 = st.columns(6)
     metric_1.metric("하역량", f"{unloading:,.0f} t/h")
-    metric_2.metric("예상 일 하역량", f"{daily_unloading:,.0f} t/day")
+    metric_2.metric("브랜드 기준 일 하역량", f"{daily_unloading:,.0f} t/day")
     metric_3.metric("실제 누적 하역량", f"{actual_unloaded:.1f} t")
     metric_4.metric("버켓 모터 부하", f"{motor_load:.1f} %")
     metric_5.metric("버켓 토크", f"{bucket_torque:.1f} %")
