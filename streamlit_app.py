@@ -290,6 +290,7 @@ else:
     loadcell_status = "로드셀 대기"
 
 estimated_hours = ship_cargo / unloading if unloading > 0 else 0.0
+daily_unloading = unloading * 24
 
 if running:
     st.success(
@@ -344,7 +345,7 @@ def render_ai_live_control() -> None:
 *{{box-sizing:border-box}} body{{margin:0;background:transparent;color:#eef8ff;
 font-family:Arial,"Malgun Gothic",sans-serif}}
 .title{{font-size:18px;font-weight:850;margin:0 0 10px}}
-.grid{{display:grid;grid-template-columns:repeat(7,1fr);gap:8px}}
+.grid{{display:grid;grid-template-columns:repeat(8,1fr);gap:8px}}
 .card{{min-height:70px;padding:10px 12px;border:1px solid #28536e;border-radius:9px;
 background:linear-gradient(180deg,#0a263a,#061827)}}
 .name{{font-size:10px;color:#8eb4c9}} .value{{margin-top:7px;font-size:20px;font-weight:850}}
@@ -363,6 +364,7 @@ background:#08372f;color:#75f2ac;font-size:12px;font-weight:750}}
  <div class="card"><div class="name">FEEDER BC</div><div class="value" id="feeder"></div></div>
  <div class="card"><div class="name">GANTRY BC</div><div class="value" id="gantry"></div></div>
  <div class="card"><div class="name">실시간 하역량</div><div class="value" id="rate"></div></div>
+ <div class="card"><div class="name">예상 일 하역량</div><div class="value" id="dayrate"></div></div>
 </div>
 <div class="decision" id="decision"></div>
 <script>
@@ -402,6 +404,7 @@ function update(){{
  document.getElementById("feeder").textContent=feeder+" %";
  document.getElementById("gantry").textContent=gantry+" %";
  document.getElementById("rate").textContent=Math.round(rate).toLocaleString()+" t/h";
+ document.getElementById("dayrate").textContent=Math.round(rate*24).toLocaleString()+" t/day";
  const decision=document.getElementById("decision");
  decision.className=overLimit?"decision warn":"decision";
  decision.textContent="AI 판단: "+reason+" · BE DRIVE 부하 "+load.toFixed(1)+"%";
@@ -498,7 +501,7 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
 @keyframes lift{{from{{transform:translateY(110px)}}to{{transform:translateY(-55px)}}}}
 @keyframes digDepth{{0%,100%{{transform:translateY({be_depth_offset}px)}}
 50%{{transform:translateY({be_depth_offset + 24}px)}}}}
-.bottom{{position:absolute;left:176px;right:176px;bottom:13px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px}}
+.bottom{{position:absolute;left:176px;right:176px;bottom:13px;display:grid;grid-template-columns:repeat(5,1fr);gap:8px}}
 .tile{{padding:10px 12px;border:1px solid #29516a;border-radius:8px;background:#071d2ddd}}
 .tn{{font-size:9px;color:#82a8bd}} .tv{{font-size:17px;font-weight:850;margin-top:3px}}
 </style>
@@ -514,6 +517,7 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
   <div class="k">화물 브랜드</div><div class="v">{safe_cargo_brand}</div>
   <div class="k">선박 적재 화물량</div><div class="v">{ship_cargo:,.0f} t</div>
   <div class="k">하역량</div><div class="v">{unloading:,.0f} t/h</div>
+  <div class="k">예상 일 하역량</div><div class="v">{daily_unloading:,.0f} t/day</div>
   <div class="k">예상 하역시간</div><div class="v">{estimated_hours:.1f} h</div>
   <div class="k">호퍼 로드셀</div><div class="v accent">{hopper_load:.1f} t</div>
   <div class="k">{loadcell_status}</div>
@@ -580,7 +584,7 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
 <!-- BOOM and BOOM BC -->
 <path d="M414 171 L1010 179 L1005 231 L414 220Z" class="steel"/>
 <path d="M1005 179 L1200 132 L1210 174 L1005 231Z" class="steel"/>
-<path d="M435 195 L761 184" class="cargo boom-cargo"/>
+<path d="M435 195 L761 195" class="cargo boom-cargo"/>
 
 <!-- Forestay -->
 <path d="M735 177 L760 25 L786 177" class="truss"/>
@@ -640,6 +644,7 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
  <div class="tile"><div class="tn">버켓 토크</div><div class="tv">{bucket_torque:.1f} %</div></div>
  <div class="tile"><div class="tn">호퍼 로드셀</div><div class="tv">{hopper_load:.1f} t</div></div>
  <div class="tile"><div class="tn">하역량</div><div class="tv">{unloading:,.0f} t/h</div></div>
+ <div class="tile"><div class="tn">예상 일 하역량</div><div class="tv">{daily_unloading:,.0f} t/day</div></div>
 </div>
 </div>
 {flush_stop_script}
@@ -656,15 +661,16 @@ if mode == "AI 자동" and running:
 *{{box-sizing:border-box}}body{{margin:0;background:transparent;color:#f2f8fc;
 font-family:Arial,"Malgun Gothic",sans-serif}}
 h2{{font-size:21px;margin:0 0 12px}}h3{{font-size:15px;margin:13px 0 8px}}
-.grid4{{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}}
+.grid5{{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}}
 .grid3{{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}}
 .card{{min-height:70px;padding:11px;border:1px solid #29546d;border-radius:9px;
 background:linear-gradient(180deg,#0a263a,#061827)}}
 .name{{font-size:10px;color:#91b4c8}}.value{{font-size:21px;font-weight:850;margin-top:7px}}
 </style></head><body>
 <h2>실시간 운전 데이터</h2>
-<div class="grid4">
+<div class="grid5">
  <div class="card"><div class="name">하역량</div><div class="value" id="u"></div></div>
+ <div class="card"><div class="name">예상 일 하역량</div><div class="value" id="ud"></div></div>
  <div class="card"><div class="name">버켓 모터 부하</div><div class="value" id="bl"></div></div>
  <div class="card"><div class="name">버켓 토크</div><div class="value" id="bt"></div></div>
  <div class="card"><div class="name">호퍼 로드셀</div><div class="value" id="hp"></div></div>
@@ -706,7 +712,8 @@ function tick(){{
  const bml=Math.min(100,7+bs*.42+u/900),bmt=Math.min(100,6+bs*.35);
  const fml=Math.min(100,10+fs*.48+hp*.40),fmt=Math.min(100,8+fs*.40+hp*.50);
  const gml=Math.min(100,7+gs*.42),gmt=Math.min(100,6+gs*.35);
- put("u",Math.round(u).toLocaleString()+" t/h");put("bl",bl.toFixed(1)+" %");
+ put("u",Math.round(u).toLocaleString()+" t/h");put("ud",Math.round(u*24).toLocaleString()+" t/day");
+ put("bl",bl.toFixed(1)+" %");
  put("bt",bt.toFixed(1)+" %");put("hp",hp.toFixed(1)+" t");
  put("bs",bs+" %");put("bml",bml.toFixed(1)+" %");put("bmt",bmt.toFixed(1)+" %");
  put("fs",fs+" %");put("fml",fml.toFixed(1)+" %");put("fmt",fmt.toFixed(1)+" %");
@@ -717,11 +724,12 @@ tick();window.setInterval(tick,1000);
     components.html(live_data_html, height=520, scrolling=False)
 else:
     st.subheader("실시간 운전 데이터")
-    metric_1, metric_2, metric_3, metric_4 = st.columns(4)
+    metric_1, metric_2, metric_3, metric_4, metric_5 = st.columns(5)
     metric_1.metric("하역량", f"{unloading:,.0f} t/h")
-    metric_2.metric("버켓 모터 부하", f"{motor_load:.1f} %")
-    metric_3.metric("버켓 토크", f"{bucket_torque:.1f} %")
-    metric_4.metric("호퍼 로드셀", f"{hopper_load:.1f} t")
+    metric_2.metric("예상 일 하역량", f"{daily_unloading:,.0f} t/day")
+    metric_3.metric("버켓 모터 부하", f"{motor_load:.1f} %")
+    metric_4.metric("버켓 토크", f"{bucket_torque:.1f} %")
+    metric_5.metric("호퍼 로드셀", f"{hopper_load:.1f} t")
 
     st.subheader("컨베이어 실시간 운전 데이터")
     st.markdown("##### BOOM BC")
