@@ -1,6 +1,9 @@
 import html
+import csv
+import io
 import math
 import time
+from datetime import datetime
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -21,6 +24,12 @@ if "last_accumulation_time" not in st.session_state:
     st.session_state.last_accumulation_time = time.time()
 if "last_unloading_rate" not in st.session_state:
     st.session_state.last_unloading_rate = 0.0
+if "training_records" not in st.session_state:
+    st.session_state.training_records = []
+if "recording_enabled" not in st.session_state:
+    st.session_state.recording_enabled = False
+if "last_record_time" not in st.session_state:
+    st.session_state.last_record_time = 0.0
 
 
 st.markdown(
@@ -890,6 +899,114 @@ else:
     gantry_1.metric("GANTRY BC 벨트 속도", f"{gantry_speed if conveyor_running else 0} %")
     gantry_2.metric("GANTRY BC 모터 부하", f"{gantry_motor_load:.1f} %")
     gantry_3.metric("GANTRY BC 토크", f"{gantry_torque:.1f} %")
+
+
+def make_training_record(excellent: bool = False) -> dict[str, object]:
+    """현재 디지털 트윈 상태를 AI 학습용 한 행으로 만든다."""
+    now = time.time()
+    wave = math.sin(now / 3.0)
+    slow_wave = math.sin(now / 4.7 + 1.1)
+    live_rate = unloading * (1.0 + wave * 0.025 + slow_wave * 0.012) if running else 0.0
+    live_hopper = max(0.0, hopper_load + wave * 0.35) if running else 0.0
+
+    return {
+        "기록시각": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "화물브랜드": cargo_brand or "미입력",
+        "운전모드": mode,
+        "조업상태": "조업 중" if running else "조업 정지",
+        "우수운전": "Y" if excellent else "N",
+        "버켓속도_pct": round(bucket_speed + (wave * 2 if mode == "AI 자동" and running else 0), 1),
+        "디깅깊이_pct": round(digging_depth - (slow_wave * 3 if mode == "AI 자동" and running else 0), 1),
+        "버켓적재율_pct": round(bucket_fill_rate + (slow_wave * 1.5 if running else 0), 1),
+        "BE모터부하_pct": round(motor_load + (wave * 0.6 if running else 0), 1),
+        "BE토크_pct": round(bucket_torque + (slow_wave * 0.6 if running else 0), 1),
+        "BOOM_BC속도_pct": boom_speed if conveyor_running else 0,
+        "BOOM_BC모터부하_pct": round(boom_motor_load, 1),
+        "BOOM_BC토크_pct": round(boom_torque, 1),
+        "FEEDER_BC속도_pct": feeder_speed if conveyor_running else 0,
+        "FEEDER_BC모터부하_pct": round(feeder_motor_load, 1),
+        "FEEDER_BC토크_pct": round(feeder_torque, 1),
+        "GANTRY_BC속도_pct": gantry_speed if conveyor_running else 0,
+        "GANTRY_BC모터부하_pct": round(gantry_motor_load, 1),
+        "GANTRY_BC토크_pct": round(gantry_torque, 1),
+        "호퍼로드셀_t": round(live_hopper, 2),
+        "실시간하역량_tph": round(live_rate, 1),
+        "브랜드기준하역량_12h_t": round(brand_reference_per_csu, 1),
+        "실제누적하역량_t": round(actual_unloaded, 2),
+        "AI판단": ai_decision,
+    }
+
+
+def records_to_csv(records: list[dict[str, object]]) -> bytes:
+    """엑셀에서 한글이 깨지지 않는 UTF-8 BOM CSV를 만든다."""
+    if not records:
+        return b""
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(buffer, fieldnames=list(records[0].keys()))
+    writer.writeheader()
+    writer.writerows(records)
+    return ("\ufeff" + buffer.getvalue()).encode("utf-8")
+
+
+@st.fragment(run_every=5)
+def render_training_recorder() -> None:
+    st.subheader("🧠 AI 학습 데이터 기록")
+    start_record, stop_record, mark_excellent, clear_record = st.columns(4)
+
+    with start_record:
+        if st.button("● 기록 시작", use_container_width=True):
+            st.session_state.recording_enabled = True
+            st.session_state.last_record_time = 0.0
+    with stop_record:
+        if st.button("■ 기록 종료", use_container_width=True):
+            st.session_state.recording_enabled = False
+    with mark_excellent:
+        if st.button(
+            "★ 우수 운전 표시",
+            use_container_width=True,
+            disabled=not running,
+        ):
+            st.session_state.training_records.append(make_training_record(excellent=True))
+            st.success("현재 운전상태를 우수 운전 사례로 저장했습니다.")
+    with clear_record:
+        if st.button("기록 초기화", use_container_width=True):
+            st.session_state.training_records = []
+            st.session_state.last_record_time = 0.0
+
+    record_now = time.time()
+    if (
+        st.session_state.recording_enabled
+        and running
+        and record_now - st.session_state.last_record_time >= 4.5
+    ):
+        st.session_state.training_records.append(make_training_record())
+        st.session_state.last_record_time = record_now
+
+    record_count = len(st.session_state.training_records)
+    excellent_count = sum(
+        row.get("우수운전") == "Y" for row in st.session_state.training_records
+    )
+    status_text = "기록 중 · 5초 간격 자동 저장" if st.session_state.recording_enabled else "기록 대기"
+
+    info_1, info_2, info_3 = st.columns(3)
+    info_1.metric("기록 상태", status_text)
+    info_2.metric("수집 데이터", f"{record_count:,}건")
+    info_3.metric("우수 운전 사례", f"{excellent_count:,}건")
+
+    if st.session_state.recording_enabled and not running:
+        st.warning("조업 착수 후 데이터 자동 기록이 시작됩니다.")
+
+    st.download_button(
+        "⬇ AI 학습 데이터 CSV 다운로드",
+        data=records_to_csv(st.session_state.training_records),
+        file_name=f"CSU_AI_학습데이터_{datetime.now():%Y%m%d_%H%M}.csv",
+        mime="text/csv",
+        use_container_width=True,
+        disabled=record_count == 0,
+    )
+
+
+render_training_recorder()
 
 st.caption(
     "데모용 디지털 트윈입니다. 실제 설비 적용 전에는 현장 계측값과 제어 한계값으로 보정해야 합니다."
