@@ -1224,15 +1224,19 @@ def render_company_operation_entry() -> None:
 
 @st.fragment(run_every=5)
 def render_training_recorder() -> None:
-    st.subheader("🧠 AI 학습 데이터 기록")
+    st.subheader("🧠 AI 학습용 데이터 수집")
+    st.info(
+        "현재 단계는 머신러닝 학습이 아니라 학습자료 수집입니다. "
+        "입력·수집한 값은 임시 세션에 저장되므로 작업 종료 전에 반드시 CSV를 다운로드하세요."
+    )
     start_record, stop_record, mark_excellent, clear_record = st.columns(4)
 
     with start_record:
-        if st.button("● 기록 시작", use_container_width=True):
+        if st.button("● 데이터 수집 시작", use_container_width=True):
             st.session_state.recording_enabled = True
             st.session_state.last_record_time = 0.0
     with stop_record:
-        if st.button("■ 기록 종료", use_container_width=True):
+        if st.button("■ 데이터 수집 종료", use_container_width=True):
             st.session_state.recording_enabled = False
     with mark_excellent:
         if st.button(
@@ -1243,7 +1247,7 @@ def render_training_recorder() -> None:
             st.session_state.training_records.append(make_training_record(excellent=True))
             st.success("현재 운전상태를 우수 운전 사례로 저장했습니다.")
     with clear_record:
-        if st.button("기록 초기화", use_container_width=True):
+        if st.button("수집 데이터 초기화", use_container_width=True):
             st.session_state.training_records = []
             st.session_state.last_record_time = 0.0
 
@@ -1260,7 +1264,7 @@ def render_training_recorder() -> None:
     excellent_count = sum(
         row.get("우수운전") == "Y" for row in st.session_state.training_records
     )
-    status_text = "기록 중 · 5초 간격 자동 저장" if st.session_state.recording_enabled else "기록 대기"
+    status_text = "수집 중 · 5초 간격 임시 저장" if st.session_state.recording_enabled else "수집 대기"
 
     info_1, info_2, info_3 = st.columns(3)
     info_1.metric("기록 상태", status_text)
