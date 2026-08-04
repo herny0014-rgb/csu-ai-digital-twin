@@ -15,6 +15,12 @@ st.set_page_config(
 
 if "csu_running" not in st.session_state:
     st.session_state.csu_running = False
+if "actual_unloaded_tons" not in st.session_state:
+    st.session_state.actual_unloaded_tons = 0.0
+if "last_accumulation_time" not in st.session_state:
+    st.session_state.last_accumulation_time = time.time()
+if "last_unloading_rate" not in st.session_state:
+    st.session_state.last_unloading_rate = 0.0
 
 
 st.markdown(
@@ -88,6 +94,9 @@ with start_col:
     st.write("")
     if st.button("▶ 조업 착수", use_container_width=True):
         st.session_state.csu_running = True
+        st.session_state.actual_unloaded_tons = 0.0
+        st.session_state.last_accumulation_time = time.time()
+        st.session_state.last_unloading_rate = 0.0
 with stop_col:
     st.write("")
     if st.button("■ 조업 정지", use_container_width=True):
@@ -109,14 +118,53 @@ with cargo_col:
         step=100,
     )
 
-brand_col, brand_space = st.columns([1.5, 4.5])
+BRAND_UNLOADING_STATS = {
+    "Gemini": (127_780, 25_092),
+    "SMT": (56_574, 21_581),
+    "Karembe": (241_708, 21_451),
+    "Ouaco": (2_473_611, 20_197),
+    "Poya": (1_106_634, 18_868),
+    "Nakety": (180_745, 18_300),
+    "NGO": (368_634, 16_905),
+    "Kouaoua": (599_028, 16_858),
+    "Ivory Coast": (59_640, 15_254),
+    "Poya, Ouaco": (170_013, 14_824),
+    "TontoutaOuinne": (62_421, 10_836),
+}
+OVERALL_AVERAGE_DAILY_RATE = 19_114
+
+brand_col, brand_input_col, brand_info_col = st.columns([1.4, 1.4, 3.2])
 with brand_col:
-    cargo_brand = st.text_input(
-        "화물 브랜드 (니켈)",
-        value="",
-        placeholder="브랜드명 입력",
-        max_chars=40,
+    selected_brand = st.selectbox(
+        "니켈 브랜드 기준",
+        ["직접 입력", *BRAND_UNLOADING_STATS.keys()],
     )
+with brand_input_col:
+    custom_brand = st.text_input(
+        "화물 브랜드 직접 입력",
+        value="",
+        placeholder="목록에 없는 브랜드",
+        max_chars=40,
+        disabled=(selected_brand != "직접 입력"),
+    )
+
+cargo_brand = custom_brand.strip() if selected_brand == "직접 입력" else selected_brand
+brand_total_tons, brand_reference_daily = BRAND_UNLOADING_STATS.get(
+    selected_brand,
+    (0, OVERALL_AVERAGE_DAILY_RATE),
+)
+brand_reference_hourly = brand_reference_daily / 24
+brand_performance_factor = brand_reference_daily / OVERALL_AVERAGE_DAILY_RATE
+
+with brand_info_col:
+    if selected_brand == "직접 입력":
+        st.info("직접 입력 브랜드는 전체 평균 19,114 T/D를 기준으로 계산합니다.")
+    else:
+        st.info(
+            f"최근 2년 실적 · 총 {brand_total_tons:,}t · "
+            f"평균 {brand_reference_daily:,} T/D "
+            f"({brand_reference_hourly:,.0f} t/h)"
+        )
 
 st.markdown("#### 컨베이어 벨트 속도 제어")
 boom_col, feeder_col, gantry_col = st.columns(3)
@@ -177,6 +225,8 @@ if mode == "AI 자동":
         f" · {boom_action} · BC 속도 자동 조정 "
         f"{boom_speed}/{feeder_speed}/{gantry_speed}%"
     )
+    if selected_brand != "직접 입력":
+        ai_decision += f" · {selected_brand} 기준 {brand_reference_daily:,} T/D 반영"
 else:
     digging_depth = manual_digging_depth
     bucket_speed = manual_speed
@@ -226,7 +276,10 @@ if running:
     feeder_discharge_coefficient = 0.86
     conveyor_line_ready = boom_speed > 0 and feeder_speed > 0 and gantry_speed > 0
     unloading = (
-        hopper_load * bucket_speed * feeder_discharge_coefficient
+        hopper_load
+        * bucket_speed
+        * feeder_discharge_coefficient
+        * brand_performance_factor
         if conveyor_line_ready else 0.0
     )
     motor_load = min(100.0, 16 + bucket_speed * 0.66 + material_supply * 0.14)
@@ -264,7 +317,7 @@ elif flushing:
         * remaining_ratio,
     )
     unloading = (
-        hopper_load * feeder_speed * 0.72
+        hopper_load * feeder_speed * 0.72 * brand_performance_factor
         if boom_speed > 0 and feeder_speed > 0 and gantry_speed > 0
         else 0.0
     )
@@ -291,6 +344,19 @@ else:
 
 estimated_hours = ship_cargo / unloading if unloading > 0 else 0.0
 daily_unloading = unloading * 24
+
+# 직전 화면 갱신 이후의 하역량을 누적한다. 정지 후에도 누적값은 유지된다.
+accumulation_now = time.time()
+accumulation_seconds = max(
+    0.0,
+    accumulation_now - st.session_state.last_accumulation_time,
+)
+st.session_state.actual_unloaded_tons += (
+    st.session_state.last_unloading_rate * accumulation_seconds / 3600.0
+)
+st.session_state.last_accumulation_time = accumulation_now
+st.session_state.last_unloading_rate = unloading if conveyor_running else 0.0
+actual_unloaded = st.session_state.actual_unloaded_tons
 
 if running:
     st.success(
@@ -345,7 +411,7 @@ def render_ai_live_control() -> None:
 *{{box-sizing:border-box}} body{{margin:0;background:transparent;color:#eef8ff;
 font-family:Arial,"Malgun Gothic",sans-serif}}
 .title{{font-size:18px;font-weight:850;margin:0 0 10px}}
-.grid{{display:grid;grid-template-columns:repeat(8,1fr);gap:8px}}
+.grid{{display:grid;grid-template-columns:repeat(9,1fr);gap:8px}}
 .card{{min-height:70px;padding:10px 12px;border:1px solid #28536e;border-radius:9px;
 background:linear-gradient(180deg,#0a263a,#061827)}}
 .name{{font-size:10px;color:#8eb4c9}} .value{{margin-top:7px;font-size:20px;font-weight:850}}
@@ -365,14 +431,20 @@ background:#08372f;color:#75f2ac;font-size:12px;font-weight:750}}
  <div class="card"><div class="name">GANTRY BC</div><div class="value" id="gantry"></div></div>
  <div class="card"><div class="name">실시간 하역량</div><div class="value" id="rate"></div></div>
  <div class="card"><div class="name">예상 일 하역량</div><div class="value" id="dayrate"></div></div>
+ <div class="card"><div class="name">실제 누적 하역량</div><div class="value" id="actualrate"></div></div>
 </div>
 <div class="decision" id="decision"></div>
 <script>
 const baseBucket={bucket_speed}, baseDepth={digging_depth};
 const baseBoom={boom_speed}, baseFeeder={feeder_speed};
 const baseGantry={gantry_speed}, supply={material_supply};
+const brandFactor={brand_performance_factor:.6f};
+let actualTons={actual_unloaded:.6f}, previousTick=Date.now();
 function clamp(v,a,b){{return Math.max(a,Math.min(b,v));}}
 function update(){{
+ const currentTick=Date.now();
+ const elapsedSeconds=Math.max(0,(currentTick-previousTick)/1000);
+ previousTick=currentTick;
  const phase=Date.now()/3000, sw=Math.sin(phase), lw=Math.sin(phase*.73+1.2);
  let bucket=Math.round(clamp(baseBucket+sw*3,30,90));
  let depth=Math.round(clamp(baseDepth-lw*5,20,95));
@@ -381,7 +453,7 @@ function update(){{
  let feeder=Math.round(clamp(baseFeeder+lw*3,35,100));
  const gantry=Math.round(clamp(baseGantry+(sw+lw)*1.5,35,100));
  let hopper=Math.min(50,fill*.43+bucket*.045-(feeder-baseFeeder)*.08);
- let rate=hopper*bucket*.86*(feeder/Math.max(1,baseFeeder));
+ let rate=hopper*bucket*.86*(feeder/Math.max(1,baseFeeder))*brandFactor;
  let overLimit=rate>2400;
  if(overLimit){{
    bucket=Math.max(30,bucket-4);
@@ -389,7 +461,7 @@ function update(){{
    fill=Math.round(clamp(18+depth*.92-bucket*.08,15,100));
    feeder=Math.min(100,feeder+2);
    hopper=Math.min(50,fill*.43+bucket*.045-(feeder-baseFeeder)*.08);
-   rate=hopper*bucket*.86*(feeder/Math.max(1,baseFeeder));
+   rate=hopper*bucket*.86*(feeder/Math.max(1,baseFeeder))*brandFactor;
  }}
  const load=Math.min(100,16+bucket*.66+fill*.14);
  let reason="부하 안정 → 최적 하역량 유지";
@@ -405,6 +477,8 @@ function update(){{
  document.getElementById("gantry").textContent=gantry+" %";
  document.getElementById("rate").textContent=Math.round(rate).toLocaleString()+" t/h";
  document.getElementById("dayrate").textContent=Math.round(rate*24).toLocaleString()+" t/day";
+ actualTons+=rate*elapsedSeconds/3600;
+ document.getElementById("actualrate").textContent=actualTons.toFixed(1)+" t";
  const decision=document.getElementById("decision");
  decision.className=overLimit?"decision warn":"decision";
  decision.textContent="AI 판단: "+reason+" · BE DRIVE 부하 "+load.toFixed(1)+"%";
@@ -501,7 +575,7 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
 @keyframes lift{{from{{transform:translateY(110px)}}to{{transform:translateY(-55px)}}}}
 @keyframes digDepth{{0%,100%{{transform:translateY({be_depth_offset}px)}}
 50%{{transform:translateY({be_depth_offset + 24}px)}}}}
-.bottom{{position:absolute;left:176px;right:176px;bottom:13px;display:grid;grid-template-columns:repeat(5,1fr);gap:8px}}
+.bottom{{position:absolute;left:176px;right:176px;bottom:13px;display:grid;grid-template-columns:repeat(6,1fr);gap:8px}}
 .tile{{padding:10px 12px;border:1px solid #29516a;border-radius:8px;background:#071d2ddd}}
 .tn{{font-size:9px;color:#82a8bd}} .tv{{font-size:17px;font-weight:850;margin-top:3px}}
 </style>
@@ -515,9 +589,11 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
 <div class="panel left">
   <div class="k">운전 모드</div><div class="v">{safe_mode}</div>
   <div class="k">화물 브랜드</div><div class="v">{safe_cargo_brand}</div>
+  <div class="k">브랜드 기준 일 하역률</div><div class="v">{brand_reference_daily:,.0f} T/D</div>
   <div class="k">선박 적재 화물량</div><div class="v">{ship_cargo:,.0f} t</div>
-  <div class="k">하역량</div><div class="v">{unloading:,.0f} t/h</div>
-  <div class="k">예상 일 하역량</div><div class="v">{daily_unloading:,.0f} t/day</div>
+  <div class="k">하역량</div><div class="v" id="scene-rate">{unloading:,.0f} t/h</div>
+  <div class="k">예상 일 하역량</div><div class="v" id="scene-dayrate">{daily_unloading:,.0f} t/day</div>
+  <div class="k">실제 누적 하역량</div><div class="v" id="actual-unloaded">{actual_unloaded:.1f} t</div>
   <div class="k">예상 하역시간</div><div class="v">{estimated_hours:.1f} h</div>
   <div class="k">호퍼 로드셀</div><div class="v accent">{hopper_load:.1f} t</div>
   <div class="k">{loadcell_status}</div>
@@ -643,10 +719,40 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
  <div class="tile"><div class="tn">버켓 모터 부하</div><div class="tv">{motor_load:.1f} %</div></div>
  <div class="tile"><div class="tn">버켓 토크</div><div class="tv">{bucket_torque:.1f} %</div></div>
  <div class="tile"><div class="tn">호퍼 로드셀</div><div class="tv">{hopper_load:.1f} t</div></div>
- <div class="tile"><div class="tn">하역량</div><div class="tv">{unloading:,.0f} t/h</div></div>
- <div class="tile"><div class="tn">예상 일 하역량</div><div class="tv">{daily_unloading:,.0f} t/day</div></div>
+ <div class="tile"><div class="tn">하역량</div><div class="tv" id="bottom-rate">{unloading:,.0f} t/h</div></div>
+ <div class="tile"><div class="tn">예상 일 하역량</div><div class="tv" id="bottom-dayrate">{daily_unloading:,.0f} t/day</div></div>
+ <div class="tile"><div class="tn">실제 누적 하역량</div><div class="tv" id="actual-bottom">{actual_unloaded:.1f} t</div></div>
 </div>
 </div>
+<script>
+let sceneActual={actual_unloaded:.6f};
+let scenePrevious=Date.now();
+const sceneBaseRate={unloading:.6f};
+const sceneManual={str(mode == "수동" and running).lower()};
+window.setInterval(()=>{{
+ const now=Date.now();
+ const seconds=Math.max(0,(now-scenePrevious)/1000);
+ scenePrevious=now;
+ const phase=now/3000;
+ const sceneRate=sceneBaseRate*(sceneManual ? 1+Math.sin(phase)*.025+Math.sin(phase*.71+1.1)*.012 : 1);
+ sceneActual+=sceneRate*seconds/3600;
+ const value=sceneActual.toFixed(1)+" t";
+ const rateValue=Math.round(sceneRate).toLocaleString()+" t/h";
+ const dayValue=Math.round(sceneRate*24).toLocaleString()+" t/day";
+ const left=document.getElementById("actual-unloaded");
+ const bottom=document.getElementById("actual-bottom");
+ const leftRate=document.getElementById("scene-rate");
+ const leftDay=document.getElementById("scene-dayrate");
+ const bottomRate=document.getElementById("bottom-rate");
+ const bottomDay=document.getElementById("bottom-dayrate");
+ if(left) left.textContent=value;
+ if(bottom) bottom.textContent=value;
+ if(leftRate) leftRate.textContent=rateValue;
+ if(leftDay) leftDay.textContent=dayValue;
+ if(bottomRate) bottomRate.textContent=rateValue;
+ if(bottomDay) bottomDay.textContent=dayValue;
+}},1000);
+</script>
 {flush_stop_script}
 </body>
 </html>
@@ -654,23 +760,24 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
 
 components.html(digital_twin_html, height=710, scrolling=False)
 
-if mode == "AI 자동" and running:
+if running:
     live_data_html = f"""
 <!doctype html><html lang="ko"><head><meta charset="utf-8">
 <style>
 *{{box-sizing:border-box}}body{{margin:0;background:transparent;color:#f2f8fc;
 font-family:Arial,"Malgun Gothic",sans-serif}}
 h2{{font-size:21px;margin:0 0 12px}}h3{{font-size:15px;margin:13px 0 8px}}
-.grid5{{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}}
+.grid6{{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}}
 .grid3{{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}}
 .card{{min-height:70px;padding:11px;border:1px solid #29546d;border-radius:9px;
 background:linear-gradient(180deg,#0a263a,#061827)}}
 .name{{font-size:10px;color:#91b4c8}}.value{{font-size:21px;font-weight:850;margin-top:7px}}
 </style></head><body>
 <h2>실시간 운전 데이터</h2>
-<div class="grid5">
+<div class="grid6">
  <div class="card"><div class="name">하역량</div><div class="value" id="u"></div></div>
  <div class="card"><div class="name">예상 일 하역량</div><div class="value" id="ud"></div></div>
+ <div class="card"><div class="name">실제 누적 하역량</div><div class="value" id="ua"></div></div>
  <div class="card"><div class="name">버켓 모터 부하</div><div class="value" id="bl"></div></div>
  <div class="card"><div class="name">버켓 토크</div><div class="value" id="bt"></div></div>
  <div class="card"><div class="name">호퍼 로드셀</div><div class="value" id="hp"></div></div>
@@ -693,26 +800,35 @@ background:linear-gradient(180deg,#0a263a,#061827)}}
 </div>
 <script>
 const bb={bucket_speed},bd={digging_depth},bo={boom_speed},fe={feeder_speed},ga={gantry_speed};
+const brandFactor={brand_performance_factor:.6f};
+const aiMode={str(mode == "AI 자동").lower()};
 const C=(v,a,b)=>Math.max(a,Math.min(b,v)), put=(id,v)=>document.getElementById(id).textContent=v;
+let accumulated={actual_unloaded:.6f},previous=Date.now();
 function tick(){{
+ const now=Date.now(),elapsed=Math.max(0,(now-previous)/1000);previous=now;
  const p=Date.now()/3000,sw=Math.sin(p),lw=Math.sin(p*.73+1.2);
- let b=Math.round(C(bb+sw*3,30,90)),bs=Math.round(C(bo+sw*2,35,100));
- let fs=Math.round(C(fe+lw*3,35,100)),gs=Math.round(C(ga+(sw+lw)*1.5,35,100));
- let depth=Math.round(C(bd-lw*5,20,95));
+ let b=aiMode?Math.round(C(bb+sw*3,30,90)):bb;
+ let bs=aiMode?Math.round(C(bo+sw*2,35,100)):bo;
+ let fs=aiMode?Math.round(C(fe+lw*3,35,100)):fe;
+ let gs=aiMode?Math.round(C(ga+(sw+lw)*1.5,35,100)):ga;
+ let depth=aiMode?Math.round(C(bd-lw*5,20,95)):bd;
  let fill=Math.round(C(18+depth*.92-b*.08,15,100));
  let hp=Math.min(50,fill*.43+b*.045-(fs-fe)*.08);
- let u=hp*b*.86*(fs/Math.max(1,fe));
- if(u>2400){{
+ let u=hp*b*.86*(fs/Math.max(1,fe))*brandFactor;
+ if(!aiMode) u*=1+sw*.025+lw*.012;
+ if(aiMode && u>2400){{
    b=Math.max(30,b-4);depth=Math.max(20,depth-6);
    fill=Math.round(C(18+depth*.92-b*.08,15,100));fs=Math.min(100,fs+2);
    hp=Math.min(50,fill*.43+b*.045-(fs-fe)*.08);
-   u=hp*b*.86*(fs/Math.max(1,fe));
+   u=hp*b*.86*(fs/Math.max(1,fe))*brandFactor;
  }}
  const bl=Math.min(100,16+b*.66+fill*.14),bt=Math.min(100,14+b*.58+fill*.18);
  const bml=Math.min(100,7+bs*.42+u/900),bmt=Math.min(100,6+bs*.35);
  const fml=Math.min(100,10+fs*.48+hp*.40),fmt=Math.min(100,8+fs*.40+hp*.50);
  const gml=Math.min(100,7+gs*.42),gmt=Math.min(100,6+gs*.35);
+ accumulated+=u*elapsed/3600;
  put("u",Math.round(u).toLocaleString()+" t/h");put("ud",Math.round(u*24).toLocaleString()+" t/day");
+ put("ua",accumulated.toFixed(1)+" t");
  put("bl",bl.toFixed(1)+" %");
  put("bt",bt.toFixed(1)+" %");put("hp",hp.toFixed(1)+" t");
  put("bs",bs+" %");put("bml",bml.toFixed(1)+" %");put("bmt",bmt.toFixed(1)+" %");
@@ -724,12 +840,13 @@ tick();window.setInterval(tick,1000);
     components.html(live_data_html, height=520, scrolling=False)
 else:
     st.subheader("실시간 운전 데이터")
-    metric_1, metric_2, metric_3, metric_4, metric_5 = st.columns(5)
+    metric_1, metric_2, metric_3, metric_4, metric_5, metric_6 = st.columns(6)
     metric_1.metric("하역량", f"{unloading:,.0f} t/h")
     metric_2.metric("예상 일 하역량", f"{daily_unloading:,.0f} t/day")
-    metric_3.metric("버켓 모터 부하", f"{motor_load:.1f} %")
-    metric_4.metric("버켓 토크", f"{bucket_torque:.1f} %")
-    metric_5.metric("호퍼 로드셀", f"{hopper_load:.1f} t")
+    metric_3.metric("실제 누적 하역량", f"{actual_unloaded:.1f} t")
+    metric_4.metric("버켓 모터 부하", f"{motor_load:.1f} %")
+    metric_5.metric("버켓 토크", f"{bucket_torque:.1f} %")
+    metric_6.metric("호퍼 로드셀", f"{hopper_load:.1f} t")
 
     st.subheader("컨베이어 실시간 운전 데이터")
     st.markdown("##### BOOM BC")
