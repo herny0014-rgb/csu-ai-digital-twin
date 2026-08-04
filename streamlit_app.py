@@ -33,6 +33,12 @@ if "recording_enabled" not in st.session_state:
     st.session_state.recording_enabled = False
 if "last_record_time" not in st.session_state:
     st.session_state.last_record_time = 0.0
+if "company_live_recording" not in st.session_state:
+    st.session_state.company_live_recording = False
+if "company_live_template" not in st.session_state:
+    st.session_state.company_live_template = None
+if "company_last_record_time" not in st.session_state:
+    st.session_state.company_last_record_time = 0.0
 
 
 st.markdown(
@@ -1101,7 +1107,7 @@ def render_company_operation_entry() -> None:
                     ],
                 )
             with stop_2:
-                actual_risk = st.number_input("최대 사행 위험도 (%)", 0, 100, 0, 1)
+                continuous_actual_recording = st.checkbox("입력값 5초 간격 연속 저장")
             with stop_3:
                 actual_excellent = st.checkbox("우수 운전 사례")
 
@@ -1148,7 +1154,7 @@ def render_company_operation_entry() -> None:
                 placeholder="예: A801 사행 경보로 25분 정지 후 벨트 속도 조정",
             )
             save_actual = st.form_submit_button(
-                "실제 운전 데이터 학습자료로 저장",
+                "입력값 적용 및 실제 운전 데이터 저장",
                 use_container_width=True,
             )
 
@@ -1207,19 +1213,24 @@ def render_company_operation_entry() -> None:
                 "실시간하역량_tph": round(net_rate, 1),
                 "브랜드기준하역량_12h_t": round(actual_brand_daily / REFERENCE_CSU_COUNT, 1),
                 "실제누적하역량_t": round(actual_tons, 1),
-                "사행감지신호_pct": actual_risk,
-                "사행위험도_pct": actual_risk,
-                "사행위험등급": "위험" if actual_risk >= 80 else "주의" if actual_risk >= 55 else "정상",
                 "AI예방조치": "실제 운전자료 분석 대기",
                 "AI판단": "회사 실제 운전 데이터",
                 "운전특이사항": actual_note.strip(),
             }
             st.session_state.training_records.append(actual_record)
+            st.session_state.company_live_template = dict(actual_record)
+            st.session_state.company_live_recording = continuous_actual_recording
+            st.session_state.company_last_record_time = time.time()
             st.success(
                 f"실제 운전자료를 저장했습니다 · {normalized_brand} · "
                 f"{actual_tons:,.0f}톤 · 가동률 {availability:.1f}% · "
                 f"실가동 하역률 {net_rate:,.0f} t/h"
             )
+            if continuous_actual_recording:
+                st.info(
+                    "회사 실제 계측값 연속기록을 시작했습니다. "
+                    "값이 바뀌면 수정한 뒤 다시 적용하면 다음 기록부터 새 값으로 저장됩니다."
+                )
 
 
 @st.fragment(run_every=5)
@@ -1250,6 +1261,9 @@ def render_training_recorder() -> None:
         if st.button("수집 데이터 초기화", use_container_width=True):
             st.session_state.training_records = []
             st.session_state.last_record_time = 0.0
+            st.session_state.company_live_recording = False
+            st.session_state.company_live_template = None
+            st.session_state.company_last_record_time = 0.0
 
     record_now = time.time()
     if (
@@ -1260,16 +1274,41 @@ def render_training_recorder() -> None:
         st.session_state.training_records.append(make_training_record())
         st.session_state.last_record_time = record_now
 
+    if (
+        st.session_state.company_live_recording
+        and st.session_state.company_live_template is not None
+        and record_now - st.session_state.company_last_record_time >= 4.5
+    ):
+        company_record = dict(st.session_state.company_live_template)
+        company_record["기록시각"] = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+        company_record["데이터출처"] = "회사 실제 계측 연속기록"
+        st.session_state.training_records.append(company_record)
+        st.session_state.company_last_record_time = record_now
+
+    if st.session_state.company_live_recording:
+        if st.button(
+            "■ 회사 실제 계측값 연속기록 종료",
+            use_container_width=True,
+        ):
+            st.session_state.company_live_recording = False
+            st.success("회사 실제 계측값 연속기록을 종료했습니다.")
+
     record_count = len(st.session_state.training_records)
     excellent_count = sum(
         row.get("우수운전") == "Y" for row in st.session_state.training_records
     )
     status_text = "수집 중 · 5초 간격 임시 저장" if st.session_state.recording_enabled else "수집 대기"
 
-    info_1, info_2, info_3 = st.columns(3)
-    info_1.metric("기록 상태", status_text)
-    info_2.metric("수집 데이터", f"{record_count:,}건")
-    info_3.metric("우수 운전 사례", f"{excellent_count:,}건")
+    company_status = (
+        "실제 계측값 5초 간격 저장 중"
+        if st.session_state.company_live_recording
+        else "실제 계측 대기"
+    )
+    info_1, info_2, info_3, info_4 = st.columns(4)
+    info_1.metric("디지털 트윈 수집", status_text)
+    info_2.metric("회사 실제 계측", company_status)
+    info_3.metric("수집 데이터", f"{record_count:,}건")
+    info_4.metric("우수 운전 사례", f"{excellent_count:,}건")
 
     if st.session_state.recording_enabled and not running:
         st.warning("조업 착수 후 데이터 자동 기록이 시작됩니다.")
