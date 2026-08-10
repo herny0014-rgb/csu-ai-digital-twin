@@ -143,6 +143,23 @@ BRAND_UNLOADING_STATS = {
     "Poya, Ouaco": (170_013, 14_824),
     "TontoutaOuinne": (62_421, 10_836),
 }
+
+# 최근 2년 브랜드별 하역실적을 바탕으로 만든 발표용 AI 추천 운전값이다.
+# 실제 적용 단계에서는 축적된 계측 데이터로 이 값을 재학습한다.
+BRAND_AI_PROFILES = {
+    "Gemini": {"depth": 67, "bucket": 82, "boom": 88, "feeder": 92, "gantry": 94},
+    "SMT": {"depth": 66, "bucket": 79, "boom": 85, "feeder": 89, "gantry": 91},
+    "Karembe": {"depth": 65, "bucket": 78, "boom": 84, "feeder": 88, "gantry": 90},
+    "Ouaco": {"depth": 64, "bucket": 75, "boom": 82, "feeder": 86, "gantry": 88},
+    "Poya": {"depth": 62, "bucket": 71, "boom": 79, "feeder": 83, "gantry": 85},
+    "Nakety": {"depth": 61, "bucket": 69, "boom": 77, "feeder": 81, "gantry": 83},
+    "NGO": {"depth": 60, "bucket": 66, "boom": 75, "feeder": 79, "gantry": 81},
+    "Kouaoua": {"depth": 60, "bucket": 66, "boom": 74, "feeder": 78, "gantry": 80},
+    "Ivory Coast": {"depth": 59, "bucket": 63, "boom": 72, "feeder": 76, "gantry": 78},
+    "Poya, Ouaco": {"depth": 58, "bucket": 61, "boom": 70, "feeder": 74, "gantry": 76},
+    "TontoutaOuinne": {"depth": 56, "bucket": 55, "boom": 65, "feeder": 69, "gantry": 71},
+}
+DEFAULT_AI_PROFILE = {"depth": 62, "bucket": 72, "boom": 80, "feeder": 84, "gantry": 86}
 OVERALL_AVERAGE_DAILY_RATE = 19_114
 REFERENCE_CSU_COUNT = 2
 EFFECTIVE_OPERATING_HOURS_PER_DAY = 12.0
@@ -171,6 +188,7 @@ brand_total_tons, brand_reference_daily = BRAND_UNLOADING_STATS.get(
 brand_reference_hourly = brand_reference_daily / 24
 brand_reference_per_csu = brand_reference_daily / REFERENCE_CSU_COUNT
 brand_performance_factor = brand_reference_daily / OVERALL_AVERAGE_DAILY_RATE
+brand_ai_profile = BRAND_AI_PROFILES.get(selected_brand, DEFAULT_AI_PROFILE)
 
 with brand_info_col:
     if selected_brand == "직접 입력":
@@ -229,11 +247,11 @@ def calculate_ai_speed(material: int) -> tuple[int, str]:
 
 
 if mode == "AI 자동":
-    digging_depth = 62
+    digging_depth = brand_ai_profile["depth"]
+    bucket_speed = brand_ai_profile["bucket"]
     preliminary_fill = int(
-        max(15, min(100, 18 + digging_depth * 0.92 - manual_speed * 0.08))
+        max(15, min(100, 18 + digging_depth * 0.92 - bucket_speed * 0.08))
     )
-    bucket_speed, ai_decision = calculate_ai_speed(preliminary_fill)
     if preliminary_fill >= 80:
         digging_depth = max(20, digging_depth - 8)
         boom_action = "버켓 적재율 상승 · 붐 UP"
@@ -246,18 +264,16 @@ if mode == "AI 자동":
         max(15, min(100, 18 + digging_depth * 0.92 - bucket_speed * 0.08))
     )
     material_supply = bucket_fill_rate
-    boom_speed = min(100, max(35, bucket_speed + 8))
-    feeder_speed = min(100, max(35, bucket_speed + (12 if bucket_fill_rate >= 70 else 5)))
-    gantry_speed = min(100, max(35, feeder_speed + 5))
-    ai_decision += (
-        f" · {boom_action} · BC 속도 자동 조정 "
-        f"{boom_speed}/{feeder_speed}/{gantry_speed}%"
+    boom_speed = brand_ai_profile["boom"]
+    feeder_speed = brand_ai_profile["feeder"]
+    gantry_speed = brand_ai_profile["gantry"]
+    profile_name = selected_brand if selected_brand != "직접 입력" else "전체 평균"
+    ai_decision = (
+        f"{profile_name} 과거 하역특성 분석 · {boom_action} · "
+        f"추천속도 BE {bucket_speed}% / BOOM {boom_speed}% / "
+        f"FEEDER {feeder_speed}% / GANTRY {gantry_speed}% · "
+        f"CSU 1대 12h 기준 {brand_reference_per_csu:,.0f}톤 반영"
     )
-    if selected_brand != "직접 입력":
-        ai_decision += (
-            f" · {selected_brand} CSU 1대 12h 기준 "
-            f"{brand_reference_per_csu:,.0f}톤 반영"
-        )
 else:
     digging_depth = manual_digging_depth
     bucket_speed = manual_speed
@@ -269,6 +285,19 @@ else:
     feeder_speed = manual_feeder_speed
     gantry_speed = manual_gantry_speed
     ai_decision = "작업자 설정 속도로 운전"
+
+if mode == "AI 자동":
+    st.markdown("#### 🤖 브랜드별 AI 최적 운전 추천")
+    rec_1, rec_2, rec_3, rec_4, rec_5 = st.columns(5)
+    rec_1.metric("버켓 속도", f"{bucket_speed}%")
+    rec_2.metric("BOOM BC", f"{boom_speed}%")
+    rec_3.metric("FEEDER BC", f"{feeder_speed}%")
+    rec_4.metric("GANTRY BC", f"{gantry_speed}%")
+    rec_5.metric("디깅 깊이", f"{digging_depth}%")
+    st.caption(
+        f"{profile_name} 최근 2년 하역실적을 반영한 발표용 추천값입니다. "
+        "실제 적용 시 현장 계측 데이터 학습으로 보정합니다."
+    )
 
 # 사행 위험도는 감지 신호, 버켓 적재율, 컨베이어 간 속도 편차를 함께 반영한다.
 speed_imbalance = abs(boom_speed - feeder_speed) + abs(feeder_speed - gantry_speed)
