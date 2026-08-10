@@ -96,40 +96,6 @@ st.markdown(
 )
 
 
-mode_col, start_col, stop_col, speed_col, material_col, cargo_col = st.columns(
-    [1.05, 0.85, 0.85, 1.25, 1.25, 1.25]
-)
-
-with mode_col:
-    mode = st.radio("운전 모드", ["수동", "AI 자동"], horizontal=True)
-with start_col:
-    st.write("")
-    if st.button("▶ 조업 착수", use_container_width=True):
-        st.session_state.csu_running = True
-        st.session_state.actual_unloaded_tons = 0.0
-        st.session_state.last_accumulation_time = time.time()
-        st.session_state.last_unloading_rate = 0.0
-with stop_col:
-    st.write("")
-    if st.button("■ 조업 정지", use_container_width=True):
-        st.session_state.csu_running = False
-with speed_col:
-    manual_speed = st.slider(
-        "버켓 속도 (%)", 0, 100, 65, disabled=(mode == "AI 자동")
-    )
-with material_col:
-    manual_digging_depth = st.slider(
-        "디깅 깊이 (%)", 0, 100, 65, disabled=(mode == "AI 자동")
-    )
-with cargo_col:
-    ship_cargo = st.number_input(
-        "선박 적재 화물량 (t)",
-        min_value=1_000,
-        max_value=200_000,
-        value=55_000,
-        step=100,
-    )
-
 BRAND_UNLOADING_STATS = {
     "Gemini": (127_780, 25_092),
     "SMT": (56_574, 21_581),
@@ -145,7 +111,6 @@ BRAND_UNLOADING_STATS = {
 }
 
 # 최근 2년 브랜드별 하역실적을 바탕으로 만든 발표용 AI 추천 운전값이다.
-# 실제 적용 단계에서는 축적된 계측 데이터로 이 값을 재학습한다.
 BRAND_AI_PROFILES = {
     "Gemini": {"depth": 67, "bucket": 82, "boom": 88, "feeder": 92, "gantry": 94},
     "SMT": {"depth": 66, "bucket": 79, "boom": 85, "feeder": 89, "gantry": 91},
@@ -165,11 +130,59 @@ REFERENCE_CSU_COUNT = 2
 EFFECTIVE_OPERATING_HOURS_PER_DAY = 12.0
 UNLOADING_RATE_CALIBRATION_FACTOR = 0.42
 
+
+mode_col, start_col, stop_col, speed_col, material_col, cargo_col = st.columns(
+    [1.05, 0.85, 0.85, 1.25, 1.25, 1.25]
+)
+
+with mode_col:
+    mode = st.radio("운전 모드", ["수동", "AI 자동"], horizontal=True)
+
+selected_brand_for_controls = st.session_state.get("selected_brand", "직접 입력")
+active_ai_profile = BRAND_AI_PROFILES.get(selected_brand_for_controls, DEFAULT_AI_PROFILE)
+if "bucket_speed_control" not in st.session_state:
+    st.session_state.bucket_speed_control = 65
+if "digging_depth_control" not in st.session_state:
+    st.session_state.digging_depth_control = 65
+if mode == "AI 자동":
+    st.session_state.bucket_speed_control = active_ai_profile["bucket"]
+    st.session_state.digging_depth_control = active_ai_profile["depth"]
+with start_col:
+    st.write("")
+    if st.button("▶ 조업 착수", use_container_width=True):
+        st.session_state.csu_running = True
+        st.session_state.actual_unloaded_tons = 0.0
+        st.session_state.last_accumulation_time = time.time()
+        st.session_state.last_unloading_rate = 0.0
+with stop_col:
+    st.write("")
+    if st.button("■ 조업 정지", use_container_width=True):
+        st.session_state.csu_running = False
+with speed_col:
+    manual_speed = st.slider(
+        "버켓 속도 (%)", 0, 100,
+        disabled=(mode == "AI 자동"), key="bucket_speed_control"
+    )
+with material_col:
+    manual_digging_depth = st.slider(
+        "디깅 깊이 (%)", 0, 100,
+        disabled=(mode == "AI 자동"), key="digging_depth_control"
+    )
+with cargo_col:
+    ship_cargo = st.number_input(
+        "선박 적재 화물량 (t)",
+        min_value=1_000,
+        max_value=200_000,
+        value=55_000,
+        step=100,
+    )
+
 brand_col, brand_input_col, brand_info_col = st.columns([1.4, 1.4, 3.2])
 with brand_col:
     selected_brand = st.selectbox(
         "니켈 브랜드 기준",
         ["직접 입력", *BRAND_UNLOADING_STATS.keys()],
+        key="selected_brand",
     )
 with brand_input_col:
     custom_brand = st.text_input(
@@ -204,18 +217,32 @@ with brand_info_col:
         )
 
 st.markdown("#### 컨베이어 벨트 속도 제어")
+if "boom_speed_control" not in st.session_state:
+    st.session_state.boom_speed_control = 80
+if "feeder_speed_control" not in st.session_state:
+    st.session_state.feeder_speed_control = 75
+if "gantry_speed_control" not in st.session_state:
+    st.session_state.gantry_speed_control = 80
+if mode == "AI 자동":
+    st.session_state.boom_speed_control = brand_ai_profile["boom"]
+    st.session_state.feeder_speed_control = brand_ai_profile["feeder"]
+    st.session_state.gantry_speed_control = brand_ai_profile["gantry"]
+
 boom_col, feeder_col, gantry_col = st.columns(3)
 with boom_col:
     manual_boom_speed = st.slider(
-        "BOOM BC 벨트 속도 (%)", 0, 100, 80, disabled=(mode == "AI 자동")
+        "BOOM BC 벨트 속도 (%)", 0, 100,
+        disabled=(mode == "AI 자동"), key="boom_speed_control"
     )
 with feeder_col:
     manual_feeder_speed = st.slider(
-        "FEEDER BC 벨트 속도 (%)", 0, 100, 75, disabled=(mode == "AI 자동")
+        "FEEDER BC 벨트 속도 (%)", 0, 100,
+        disabled=(mode == "AI 자동"), key="feeder_speed_control"
     )
 with gantry_col:
     manual_gantry_speed = st.slider(
-        "GANTRY BC 벨트 속도 (%)", 0, 100, 80, disabled=(mode == "AI 자동")
+        "GANTRY BC 벨트 속도 (%)", 0, 100,
+        disabled=(mode == "AI 자동"), key="gantry_speed_control"
     )
 
 st.markdown("#### 사행·편적 감지 조건")
