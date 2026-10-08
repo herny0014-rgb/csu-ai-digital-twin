@@ -702,7 +702,10 @@ linear-gradient(#071c2c 0 72%,#08283a 72% 82%,#0a1720 82%);box-shadow:inset 0 0 
 .grid{{position:absolute;inset:0;opacity:.16;background-image:linear-gradient(#4f789733 1px,transparent 1px),
 linear-gradient(90deg,#4f789733 1px,transparent 1px);background-size:36px 36px}}
 .topline{{position:absolute;left:20px;right:20px;top:16px;display:flex;justify-content:space-between;z-index:5}}
-.route{{font-size:12px;color:#83a9bd;letter-spacing:.03em}}
+.route{{font-size:12px;color:#b5cddb;letter-spacing:.03em;white-space:nowrap;
+display:flex;align-items:center;gap:10px;overflow-x:auto;min-width:0;padding:8px 0}}
+.route span{{flex:0 0 auto}} .route-arrow{{color:#ffad42;font-size:18px;font-weight:800}}
+.route-title{{color:#83a9bd;margin-right:6px}}
 .state{{padding:8px 15px;border:1px solid {status_color};border-radius:18px;color:{status_color};
 background:#061b29dd;font-weight:800}}
 .panel{{position:absolute;z-index:5;width:156px;padding:13px;border:1px solid #29516a;border-radius:9px;
@@ -717,18 +720,23 @@ background:linear-gradient(#0a2639ee,#061925ee);box-shadow:0 8px 24px #0006}}
 .deck{{fill:#182f3b;stroke:#486779;stroke-width:2}}
 .cargo{{fill:none;stroke:#ef861c;stroke-width:7;stroke-linecap:round;stroke-dasharray:11 12;
 animation:flow {cycle_seconds}s linear infinite;animation-play-state:{animation_state}}}
-.cargo-sm{{fill:none;stroke:#ed8a20;stroke-width:5;stroke-linecap:round;stroke-dasharray:7 9;
+.cargo-sm{{fill:none;stroke:#ef861c;stroke-width:7;stroke-linecap:round;stroke-dasharray:11 12;
 animation:flow {cycle_seconds}s linear infinite;animation-play-state:{animation_state}}}
 .boom-cargo{{animation-duration:{boom_cycle_seconds}s;animation-play-state:{boom_animation_state}}}
 .feeder-cargo{{animation-duration:{feeder_cycle_seconds}s;animation-play-state:{feeder_animation_state}}}
 .gantry-cargo{{animation-duration:{gantry_cycle_seconds}s;animation-play-state:{gantry_animation_state}}}
-.drop{{fill:none;stroke:#ff982e;stroke-width:7;stroke-linecap:round;stroke-dasharray:5 11;
+.drop{{fill:none;stroke:#ef861c;stroke-width:7;stroke-linecap:round;stroke-dasharray:11 12;
 animation:fall .62s linear infinite;animation-play-state:{animation_state}}}
 .boom-drop{{animation-duration:{max(0.35, boom_cycle_seconds * 0.35)}s;animation-play-state:{boom_animation_state}}}
 .feeder-drop{{animation-duration:{max(0.35, feeder_cycle_seconds * 0.35)}s;animation-play-state:{feeder_animation_state}}}
 .gantry-drop{{animation-duration:{max(0.35, gantry_cycle_seconds * 0.35)}s;animation-play-state:{gantry_animation_state}}}
 .bucket{{fill:url(#gold);stroke:#633800;stroke-width:2}}
-.bucketset{{animation:lift {cycle_seconds}s linear infinite;animation-play-state:{animation_state}}}
+.bucketset{{offset-path:path("M344 480 L344 128 A31 31 0 0 1 406 128 L406 490 C446 550 358 588 330 542 Q302 514 344 480 Z");
+offset-anchor:0px 0px;offset-rotate:auto 90deg;
+animation:bucketLoop {cycle_seconds * 8:.3f}s linear infinite;animation-play-state:{animation_state}}}
+.chain{{fill:none;stroke:#182820;stroke-width:17;stroke-linejoin:round}}
+.chain-link{{fill:none;stroke:#9caf97;stroke-width:3;stroke-dasharray:5 12}}
+.direction{{fill:none;stroke:#ef861c;stroke-width:7;stroke-linecap:round;marker-end:url(#direction-arrow)}}
 .be-depth{{transform:translateY({be_depth_offset}px);
 animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_state}}}
 .flush-complete .cargo,
@@ -737,8 +745,8 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
 .flush-complete .bucketset{{animation-play-state:paused!important}}
 .lbl{{fill:#061725eF;stroke:#6d8998;stroke-width:1}} .txt{{fill:#f3f8fa;font-size:11px;font-weight:700}}
 @keyframes flow{{to{{stroke-dashoffset:-92}}}}
-@keyframes fall{{to{{stroke-dashoffset:64}}}}
-@keyframes lift{{from{{transform:translateY(110px)}}to{{transform:translateY(-55px)}}}}
+@keyframes fall{{to{{stroke-dashoffset:-64}}}}
+@keyframes bucketLoop{{from{{offset-distance:0%}}to{{offset-distance:100%}}}}
 @keyframes digDepth{{0%,100%{{transform:translateY({be_depth_offset}px)}}
 50%{{transform:translateY({be_depth_offset + 24}px)}}}}
 .bottom{{position:absolute;left:176px;right:176px;bottom:13px;display:grid;grid-template-columns:repeat(6,1fr);gap:8px}}
@@ -749,7 +757,10 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
 <body>
 <div class="scene">
 <div class="grid"></div>
-<div class="topline"><div class="route">화물창 → BE → BOOM BC → FEEDER BC → GANTRY BC → A801</div>
+<div class="topline"><div class="route" aria-label="원료 이송 흐름도">
+<span class="route-title">원료 이송 흐름도</span><span>선창(Ship Hold)</span><span class="route-arrow">→</span>
+<span>BE/Bucket Elevator</span><span class="route-arrow">→</span><span>BOOM BC</span><span class="route-arrow">→</span>
+<span>FEEDER BC</span><span class="route-arrow">→</span><span>GANTRY BC</span><span class="route-arrow">→</span><span>A801</span></div>
 <div class="state">● {status_text}</div></div>
 
 <div class="panel left">
@@ -776,6 +787,9 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
 
 <svg class="machine" viewBox="0 0 1400 620" preserveAspectRatio="xMidYMid meet">
 <defs>
+ <marker id="direction-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerUnits="userSpaceOnUse" markerWidth="13" markerHeight="13" orient="auto-start-reverse">
+  <path d="M0 0 L10 5 L0 10 Z" fill="#ef861c"/>
+ </marker>
  <linearGradient id="steel" x1="0" y1="0" x2="1" y2="1">
   <stop offset="0" stop-color="#173b25"/><stop offset=".28" stop-color="#57784d"/>
   <stop offset=".5" stop-color="#98a67b"/><stop offset=".72" stop-color="#4a754a"/>
@@ -802,21 +816,36 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
       letter-spacing="2">NICKEL</text>
 
 <g class="be-depth">
-<!-- BE DIGGING / MIDDLE / TOP -->
-<path d="M345 480 L418 480 L440 530 Q410 578 355 557 L320 518Z" class="steel"/>
-<circle cx="350" cy="538" r="12" fill="#17231c" stroke="#87978b" stroke-width="3"/>
-<circle cx="400" cy="548" r="12" fill="#17231c" stroke="#87978b" stroke-width="3"/>
-<path d="M350 160 L414 160 L420 490 L354 490Z" class="steel"/>
+<!-- BE DRIVE / vertical BE / curved BE DIGGING closed bucket circuit -->
+<path d="M326 157 L422 157 L422 490 L433 526 Q424 573 371 575 Q329 574 312 537 L315 504 L326 480 Z" class="steel"/>
 <path d="M317 86 L428 86 L452 118 L430 170 L326 170 L305 137Z" class="steel"/>
-<circle cx="375" cy="128" r="26" fill="#17241d" stroke="#87988a" stroke-width="5"/>
-<path d="M367 162 L367 480" stroke="#4b6254" stroke-width="5"/>
-<g class="bucketset">
- <path d="M344 205H387L382 231Q365 242 349 230Z" class="bucket"/>
- <path d="M344 263H387L382 289Q365 300 349 288Z" class="bucket"/>
- <path d="M344 321H387L382 347Q365 358 349 346Z" class="bucket"/>
- <path d="M344 379H387L382 405Q365 416 349 404Z" class="bucket"/>
- <path d="M344 437H387L382 463Q365 474 349 462Z" class="bucket"/>
-</g>
+<circle cx="375" cy="128" r="30" fill="#17241d" stroke="#87988a" stroke-width="5"/>
+<circle cx="375" cy="128" r="12" fill="#84928a"/>
+<circle cx="375" cy="535" r="29" fill="#17241d" stroke="#87988a" stroke-width="5"/>
+<circle cx="375" cy="535" r="11" fill="#84928a"/>
+<path d="M344 480 L344 128 A31 31 0 0 1 406 128 L406 490 C446 550 358 588 330 542 Q302 514 344 480 Z" class="chain"/>
+<path d="M344 480 L344 128 A31 31 0 0 1 406 128 L406 490 C446 550 358 588 330 542 Q302 514 344 480 Z" class="chain-link"/>
+<g class="bucketset" style="animation-delay:-{cycle_seconds * 8 * 0 / 18:.3f}s"><path d="M-16 -8 H14 L11 8 Q0 18 -13 10 Z" class="bucket"/></g>
+<g class="bucketset" style="animation-delay:-{cycle_seconds * 8 * 1 / 18:.3f}s"><path d="M-16 -8 H14 L11 8 Q0 18 -13 10 Z" class="bucket"/></g>
+<g class="bucketset" style="animation-delay:-{cycle_seconds * 8 * 2 / 18:.3f}s"><path d="M-16 -8 H14 L11 8 Q0 18 -13 10 Z" class="bucket"/></g>
+<g class="bucketset" style="animation-delay:-{cycle_seconds * 8 * 3 / 18:.3f}s"><path d="M-16 -8 H14 L11 8 Q0 18 -13 10 Z" class="bucket"/></g>
+<g class="bucketset" style="animation-delay:-{cycle_seconds * 8 * 4 / 18:.3f}s"><path d="M-16 -8 H14 L11 8 Q0 18 -13 10 Z" class="bucket"/></g>
+<g class="bucketset" style="animation-delay:-{cycle_seconds * 8 * 5 / 18:.3f}s"><path d="M-16 -8 H14 L11 8 Q0 18 -13 10 Z" class="bucket"/></g>
+<g class="bucketset" style="animation-delay:-{cycle_seconds * 8 * 6 / 18:.3f}s"><path d="M-16 -8 H14 L11 8 Q0 18 -13 10 Z" class="bucket"/></g>
+<g class="bucketset" style="animation-delay:-{cycle_seconds * 8 * 7 / 18:.3f}s"><path d="M-16 -8 H14 L11 8 Q0 18 -13 10 Z" class="bucket"/></g>
+<g class="bucketset" style="animation-delay:-{cycle_seconds * 8 * 8 / 18:.3f}s"><path d="M-16 -8 H14 L11 8 Q0 18 -13 10 Z" class="bucket"/></g>
+<g class="bucketset" style="animation-delay:-{cycle_seconds * 8 * 9 / 18:.3f}s"><path d="M-16 -8 H14 L11 8 Q0 18 -13 10 Z" class="bucket"/></g>
+<g class="bucketset" style="animation-delay:-{cycle_seconds * 8 * 10 / 18:.3f}s"><path d="M-16 -8 H14 L11 8 Q0 18 -13 10 Z" class="bucket"/></g>
+<g class="bucketset" style="animation-delay:-{cycle_seconds * 8 * 11 / 18:.3f}s"><path d="M-16 -8 H14 L11 8 Q0 18 -13 10 Z" class="bucket"/></g>
+<g class="bucketset" style="animation-delay:-{cycle_seconds * 8 * 12 / 18:.3f}s"><path d="M-16 -8 H14 L11 8 Q0 18 -13 10 Z" class="bucket"/></g>
+<g class="bucketset" style="animation-delay:-{cycle_seconds * 8 * 13 / 18:.3f}s"><path d="M-16 -8 H14 L11 8 Q0 18 -13 10 Z" class="bucket"/></g>
+<g class="bucketset" style="animation-delay:-{cycle_seconds * 8 * 14 / 18:.3f}s"><path d="M-16 -8 H14 L11 8 Q0 18 -13 10 Z" class="bucket"/></g>
+<g class="bucketset" style="animation-delay:-{cycle_seconds * 8 * 15 / 18:.3f}s"><path d="M-16 -8 H14 L11 8 Q0 18 -13 10 Z" class="bucket"/></g>
+<g class="bucketset" style="animation-delay:-{cycle_seconds * 8 * 16 / 18:.3f}s"><path d="M-16 -8 H14 L11 8 Q0 18 -13 10 Z" class="bucket"/></g>
+<g class="bucketset" style="animation-delay:-{cycle_seconds * 8 * 17 / 18:.3f}s"><path d="M-16 -8 H14 L11 8 Q0 18 -13 10 Z" class="bucket"/></g>
+<!-- Single cargo centerline; mechanical bucket circuit remains unchanged -->
+<path d="M350 550 Q400 575 400 535 Q400 505 375 480 L375 160 Q405 160 442 195" class="cargo"/>
+<path d="M309 413 L309 388" class="direction"/>
 
 <!-- BE rotary mechanism -->
 <ellipse cx="438" cy="181" rx="48" ry="15" class="steel2"/>
@@ -827,6 +856,7 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
 <path d="M414 171 L1010 179 L1005 231 L414 220Z" class="steel"/>
 <path d="M1005 179 L1200 132 L1210 174 L1005 231Z" class="steel"/>
 <path d="M435 195 L761 195" class="cargo boom-cargo"/>
+<path d="M495 211 L520 211" class="direction"/>
 
 <!-- Forestay -->
 <path d="M735 177 L760 25 L786 177" class="truss"/>
@@ -838,9 +868,8 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
 <ellipse cx="761" cy="389" rx="76" ry="21" class="steel2"/>
 
 <!-- Visible BOOM BC vertical drop to FEEDER BC -->
-<path d="M748 224 L748 404" class="drop boom-drop"/>
-<path d="M761 224 L761 404" class="drop boom-drop"/>
-<path d="M774 224 L774 404" class="drop boom-drop"/>
+<path d="M761 195 L761 430" class="drop boom-drop"/>
+<path d="M790 292 L790 317" class="direction"/>
 
 <!-- Gantry frame -->
 <path d="M686 382 L730 382 L681 555 L635 555Z" class="steel"/>
@@ -849,24 +878,26 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
 
 <!-- FEEDER BC -->
 <path d="M690 405 L1053 405 L1068 453 L674 453Z" class="steel2"/>
-<path d="M708 430 L1042 430" class="cargo-sm feeder-cargo"/>
-<path d="M932 443 L932 490" class="drop feeder-drop"/>
-<path d="M945 443 L945 490" class="drop feeder-drop"/>
+<path d="M761 430 L938 430" class="cargo-sm feeder-cargo"/>
+<path d="M938 430 L938 513" class="drop feeder-drop"/>
+<path d="M971 417 L996 417" class="direction"/>
 
 <!-- GANTRY BC -->
 <rect x="720" y="490" width="470" height="46" rx="3" class="steel2"/>
-<path d="M737 513 L1172 513" class="cargo-sm gantry-cargo"/>
+<path d="M938 513 L1176 513" class="cargo-sm gantry-cargo"/>
+<path d="M1040 500 L1065 500" class="direction"/>
 <rect x="745" y="536" width="13" height="42" fill="#466d49"/>
 <rect x="1148" y="536" width="13" height="42" fill="#466d49"/>
-<path d="M1170 522 L1170 555" class="drop gantry-drop"/>
-<path d="M1183 522 L1183 555" class="drop gantry-drop"/>
+<path d="M1176 513 L1176 574" class="drop gantry-drop"/>
+<path d="M1200 536 L1200 554" class="direction"/>
 <!-- TRAVEL and land BC -->
 <rect x="620" y="548" width="112" height="24" class="steel2"/>
 <rect x="842" y="548" width="112" height="24" class="steel2"/>
 <circle cx="648" cy="579" r="15" fill="#1b2427"/><circle cx="695" cy="579" r="15" fill="#1b2427"/>
 <circle cx="870" cy="579" r="15" fill="#1b2427"/><circle cx="917" cy="579" r="15" fill="#1b2427"/>
 <rect x="1155" y="555" width="220" height="37" class="deck"/>
-<path d="M1168 574 L1360 574" class="cargo-sm gantry-cargo"/>
+<path d="M1176 574 L1360 574" class="cargo-sm gantry-cargo"/>
+<path d="M1270 586 L1295 586" class="direction"/>
 
 <!-- labels -->
 <g><rect x="205" y="74" width="96" height="26" rx="4" class="lbl"/><text x="219" y="92" class="txt">BE DRIVE</text></g>
