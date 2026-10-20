@@ -1,15 +1,10 @@
+import base64
 import html
-import csv
-import io
-import math
 import time
-from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
-
-
-KST = timezone(timedelta(hours=9), name="KST")
 
 
 st.set_page_config(
@@ -27,12 +22,19 @@ if "last_accumulation_time" not in st.session_state:
     st.session_state.last_accumulation_time = time.time()
 if "last_unloading_rate" not in st.session_state:
     st.session_state.last_unloading_rate = 0.0
-if "training_records" not in st.session_state:
-    st.session_state.training_records = []
-if "recording_enabled" not in st.session_state:
-    st.session_state.recording_enabled = False
-if "last_record_time" not in st.session_state:
-    st.session_state.last_record_time = 0.0
+if "sim_conditions" not in st.session_state:
+    st.session_state.sim_conditions = None
+
+# 상단 로고는 프로젝트의 static 폴더 이미지를 그대로 사용한다. (임시 경로에 의존하지 않음)
+LOGO_PATH = Path(__file__).parent / "static" / "posco_flow_logo_dark.png"
+try:
+    _logo_b64 = base64.b64encode(LOGO_PATH.read_bytes()).decode("ascii")
+    LOGO_HTML = (
+        f'<img class="brand-logo" src="data:image/png;base64,{_logo_b64}" '
+        'alt="POSCO 포스코플로우">'
+    )
+except OSError:
+    LOGO_HTML = ""
 
 
 st.markdown(
@@ -46,11 +48,10 @@ st.markdown(
     }
     .block-container {max-width: 1760px; padding: 4.8rem 1.5rem 2rem;}
     .app-header {display:grid; grid-template-columns:1fr auto 1fr; align-items:start;
-                 min-height:78px; margin-bottom:.45rem;}
-    .brand {position:static; grid-column:1; justify-self:start; margin-top:.45rem;
-            color:#54aef2; font-size:1.2rem; font-weight:900;
-            letter-spacing:.08em; white-space:nowrap;}
-    .title-wrap {grid-column:2; text-align:center; min-width:520px;}
+                 min-height:78px; margin-bottom:.9rem;}
+    .brand {position:static; grid-column:1; justify-self:start; margin-top:.2rem;}
+    .brand-logo {display:block; width:120px; max-width:100%; height:auto;}
+    .title-wrap {grid-column:2; text-align:center; min-width:0;}
     .page-title {color:#fff; font-size:2.25rem; font-weight:900;
                  line-height:1.2; margin:0;}
     .page-sub {color:#7fa8bf; font-size:.78rem;
@@ -83,15 +84,30 @@ st.markdown(
         border:1px solid #244c64; border-radius:10px; padding:14px;
     }
     h1,h2,h3,p,label {color:#eaf5fb !important;}
+    @media (max-width: 860px) {
+        .app-header {grid-template-columns:1fr; justify-items:center; gap:.6rem;}
+        .brand, .title-wrap {grid-column:1; justify-self:center;}
+        .page-title {font-size:1.6rem;}
+    }
+    .reco-card {border:1px solid #377697; border-radius:12px; padding:18px 22px;
+                background:linear-gradient(180deg,#0b263a,#061925); margin:.2rem 0 .6rem;}
+    .reco-badge {display:inline-block; padding:3px 10px; border:1px solid #d99120;
+                 border-radius:12px; color:#ffd06b; background:#4a3109;
+                 font-size:.8rem; font-weight:800;}
+    .reco-label {color:#8eb4c9; font-size:.95rem; margin-top:.55rem;}
+    .reco-value {color:#fff; font-size:3.2rem; font-weight:900; line-height:1.1;}
+    .reco-value span {font-size:1.3rem; color:#8eb4c9; margin-left:.35rem;}
+    .reco-basis {margin:.7rem 0 0; padding-left:1.2rem; color:#cfe4f0;
+                 font-size:.9rem; line-height:1.7;}
     </style>
     <div class="app-header">
-      <div class="brand" translate="no">POSCO FLOW</div>
+      <div class="brand" translate="no">__BRAND_LOGO__</div>
       <div class="title-wrap">
         <div class="page-title">CSU AI 하역 디지털 트윈</div>
         <div class="page-sub" translate="no">CSU · AI 하역 디지털 트윈</div>
       </div>
     </div>
-    """,
+    """.replace("__BRAND_LOGO__", LOGO_HTML),
     unsafe_allow_html=True,
 )
 
@@ -131,52 +147,65 @@ EFFECTIVE_OPERATING_HOURS_PER_DAY = 12.0
 UNLOADING_RATE_CALIBRATION_FACTOR = 0.42
 
 
-mode_col, start_col, stop_col, speed_col, material_col, cargo_col = st.columns(
-    [1.05, 0.85, 0.85, 1.25, 1.25, 1.25]
-)
+def render_chute_blockage_conditions() -> tuple[int, float, int]:
+    """슈트 막힘 이력·조건을 입력받고 경고와 참고용 손실량을 보여 준다.
 
-with mode_col:
-    mode = st.radio("운전 모드", ["수동", "AI 자동"], horizontal=True)
+    입력값은 가상 설정값이며, 기본 하역량과 추천 하역률에서는 차감하지 않는다.
+    """
+    st.markdown("#### 슈트 막힘 이력·조건")
+    with st.container(border=True):
+        st.caption(
+            "시뮬레이션과 함께 보여 줄 슈트 막힘 조건입니다. 현재 값은 가상 설정값이며 "
+            "실제 과거 이력이 아닙니다. 브랜드별 실제 이력이 확보되면 같은 칸에 바꿔 입력합니다."
+        )
+        block_1, block_2, block_3 = st.columns(3)
+        with block_1:
+            chute_count = st.number_input(
+                "슈트 막힘 횟수 (회)", min_value=0, max_value=999, value=3, step=1
+            )
+        with block_2:
+            chute_minutes = st.number_input(
+                "막힘·청소 누적 정지시간 (분)",
+                min_value=0.0,
+                max_value=100_000.0,
+                value=45.0,
+                step=5.0,
+            )
+        with block_3:
+            chute_base_rate = st.number_input(
+                "기준 하역률 (t/h)",
+                min_value=0,
+                max_value=10_000,
+                value=1_200,
+                step=50,
+            )
 
-selected_brand_for_controls = st.session_state.get("selected_brand", "직접 입력")
-active_ai_profile = BRAND_AI_PROFILES.get(selected_brand_for_controls, DEFAULT_AI_PROFILE)
-if "bucket_speed_control" not in st.session_state:
-    st.session_state.bucket_speed_control = 65
-if "digging_depth_control" not in st.session_state:
-    st.session_state.digging_depth_control = 65
-if mode == "AI 자동":
-    st.session_state.bucket_speed_control = active_ai_profile["bucket"]
-    st.session_state.digging_depth_control = active_ai_profile["depth"]
-with start_col:
-    st.write("")
-    if st.button("▶ 조업 착수", use_container_width=True):
-        st.session_state.csu_running = True
-        st.session_state.actual_unloaded_tons = 0.0
-        st.session_state.last_accumulation_time = time.time()
-        st.session_state.last_unloading_rate = 0.0
-with stop_col:
-    st.write("")
-    if st.button("■ 조업 정지", use_container_width=True):
-        st.session_state.csu_running = False
-with speed_col:
-    manual_speed = st.slider(
-        "버켓 속도 (%)", 0, 100,
-        disabled=(mode == "AI 자동"), key="bucket_speed_control"
-    )
-with material_col:
-    manual_digging_depth = st.slider(
-        "디깅 깊이 (%)", 0, 100,
-        disabled=(mode == "AI 자동"), key="digging_depth_control"
-    )
-with cargo_col:
-    ship_cargo = st.number_input(
-        "선박 적재 화물량 (t)",
-        min_value=1_000,
-        max_value=200_000,
-        value=55_000,
-        step=100,
-    )
+        average_minutes = chute_minutes / chute_count if chute_count > 0 else 0.0
+        estimated_loss = chute_base_rate * chute_minutes / 60.0
 
+        if chute_count > 0:
+            st.warning(
+                f"⚠ 슈트 막힘 경고 · 발생 {chute_count}회 · "
+                f"누적 정지 {chute_minutes:,.0f}분"
+            )
+        else:
+            st.success("슈트 막힘 없음")
+
+        stat_1, stat_2, stat_3, stat_4 = st.columns(4)
+        stat_1.metric("슈트 막힘 횟수", f"{chute_count:,}회")
+        stat_2.metric("누적 정지시간", f"{chute_minutes:,.0f}분")
+        stat_3.metric("건당 평균 정지시간", f"{average_minutes:,.1f}분")
+        stat_4.metric("추정 손실량 (참고)", f"{estimated_loss:,.0f} t")
+        st.caption(
+            "추정 손실량 = 기준 하역률 × 막힘 정지시간입니다. "
+            "같은 하역률을 유지했을 때의 기회손실 추정값이며 실제 미하역량이 아닙니다. "
+            "추천 하역률과 시뮬레이션 하역량에서는 차감하지 않습니다."
+        )
+    return int(chute_count), float(chute_minutes), int(chute_base_rate)
+
+
+# 1. 브랜드 선택
+st.markdown("#### 브랜드 선택")
 brand_col, brand_input_col, brand_info_col = st.columns([1.4, 1.4, 3.2])
 with brand_col:
     selected_brand = st.selectbox(
@@ -194,14 +223,10 @@ with brand_input_col:
     )
 
 cargo_brand = custom_brand.strip() if selected_brand == "직접 입력" else selected_brand
-brand_total_tons, brand_reference_daily = BRAND_UNLOADING_STATS.get(
+selected_total_tons, selected_daily_rate = BRAND_UNLOADING_STATS.get(
     selected_brand,
     (0, OVERALL_AVERAGE_DAILY_RATE),
 )
-brand_reference_hourly = brand_reference_daily / 24
-brand_reference_per_csu = brand_reference_daily / REFERENCE_CSU_COUNT
-brand_performance_factor = brand_reference_daily / OVERALL_AVERAGE_DAILY_RATE
-brand_ai_profile = BRAND_AI_PROFILES.get(selected_brand, DEFAULT_AI_PROFILE)
 
 with brand_info_col:
     if selected_brand == "직접 입력":
@@ -211,201 +236,72 @@ with brand_info_col:
         )
     else:
         st.info(
-            f"최근 2년 실적 · 총 {brand_total_tons:,}t · "
-            f"24h 기준 {brand_reference_daily:,} T/D · "
-            f"CSU 1대 12h 기준 {brand_reference_per_csu:,.0f}톤"
+            f"최근 2년 실적 · 총 {selected_total_tons:,}t · "
+            f"24h 기준 {selected_daily_rate:,} T/D · "
+            f"CSU 1대 12h 기준 {selected_daily_rate / REFERENCE_CSU_COUNT:,.0f}톤"
         )
 
-st.markdown("#### 컨베이어 벨트 속도 제어")
-if "boom_speed_control" not in st.session_state:
-    st.session_state.boom_speed_control = 80
-if "feeder_speed_control" not in st.session_state:
-    st.session_state.feeder_speed_control = 75
-if "gantry_speed_control" not in st.session_state:
-    st.session_state.gantry_speed_control = 80
-if mode == "AI 자동":
-    st.session_state.boom_speed_control = brand_ai_profile["boom"]
-    st.session_state.feeder_speed_control = brand_ai_profile["feeder"]
-    st.session_state.gantry_speed_control = brand_ai_profile["gantry"]
+# 2. 슈트 막힘 이력·조건
+chute_count, chute_minutes, chute_base_rate = render_chute_blockage_conditions()
 
-boom_col, feeder_col, gantry_col = st.columns(3)
-with boom_col:
-    manual_boom_speed = st.slider(
-        "BOOM BC 벨트 속도 (%)", 0, 100,
-        disabled=(mode == "AI 자동"), key="boom_speed_control"
-    )
-with feeder_col:
-    manual_feeder_speed = st.slider(
-        "FEEDER BC 벨트 속도 (%)", 0, 100,
-        disabled=(mode == "AI 자동"), key="feeder_speed_control"
-    )
-with gantry_col:
-    manual_gantry_speed = st.slider(
-        "GANTRY BC 벨트 속도 (%)", 0, 100,
-        disabled=(mode == "AI 자동"), key="gantry_speed_control"
+# 3. 시뮬레이션 실행
+current_conditions = {
+    "brand": selected_brand,
+    "cargo_brand": cargo_brand,
+    "chute_count": chute_count,
+    "chute_minutes": chute_minutes,
+    "chute_base_rate": chute_base_rate,
+}
+if st.button("▶ 시뮬레이션 실행", use_container_width=True):
+    # 실행할 때마다 조건을 새로 확정하고 누적값을 처음부터 다시 센다.
+    st.session_state.sim_conditions = current_conditions
+    st.session_state.csu_running = True
+    st.session_state.actual_unloaded_tons = 0.0
+    st.session_state.last_accumulation_time = time.time()
+    st.session_state.last_unloading_rate = 0.0
+
+sim_conditions = st.session_state.sim_conditions
+if sim_conditions is not None and sim_conditions != current_conditions:
+    st.warning(
+        "입력 조건이 바뀌었습니다. '시뮬레이션 실행'을 누르면 새 조건으로 갱신됩니다. "
+        "아래 결과는 이전 실행 조건 기준입니다."
     )
 
-st.markdown("#### 사행·편적 감지 조건")
-misalignment_signal = st.slider(
-    "사행·편적 감지 신호 (%)",
-    0,
-    100,
-    15,
-    help="현재는 데모 입력값이며, 실제 적용 시 좌·우 사행센서와 편적 계측값으로 대체합니다.",
+# 아래 결과와 시뮬레이션은 마지막으로 실행한 조건만 사용한다.
+active_conditions = sim_conditions or current_conditions
+sim_brand = active_conditions["brand"]
+sim_cargo_brand = active_conditions["cargo_brand"]
+sim_has_history = sim_brand in BRAND_UNLOADING_STATS
+brand_total_tons, brand_reference_daily = BRAND_UNLOADING_STATS.get(
+    sim_brand,
+    (0, OVERALL_AVERAGE_DAILY_RATE),
 )
+brand_reference_hourly = brand_reference_daily / 24
+brand_reference_per_csu = brand_reference_daily / REFERENCE_CSU_COUNT
+brand_performance_factor = brand_reference_daily / OVERALL_AVERAGE_DAILY_RATE
+brand_ai_profile = BRAND_AI_PROFILES.get(sim_brand, DEFAULT_AI_PROFILE)
 
 
-def calculate_ai_speed(material: int) -> tuple[int, str]:
-    """Demo controller using simulated load, torque, and hopper feedback."""
-    trial_speed = 52.0 + material * 0.38
-    trial_load = 16.0 + trial_speed * 0.66 + material * 0.14
-    trial_torque = 14.0 + trial_speed * 0.58 + material * 0.17
-    trial_hopper = material * 0.43 + trial_speed * 0.045
-
-    if trial_hopper >= 41:
-        return max(30, int(trial_speed - 14)), "호퍼 중량 상승 감지 · 버켓 감속"
-    if trial_load >= 82:
-        return max(30, int(trial_speed - 11)), "모터 부하 상승 감지 · 버켓 감속"
-    if trial_torque >= 76:
-        return max(30, int(trial_speed - 8)), "토크 상승 감지 · 버켓 감속"
-    if trial_load < 58 and trial_hopper < 32:
-        return min(90, int(trial_speed + 6)), "설비 여유 확인 · 하역량 증대"
-    return min(90, max(30, int(trial_speed))), "부하·토크·호퍼 안정 · 현재 속도 유지"
-
-
-if mode == "AI 자동":
-    digging_depth = brand_ai_profile["depth"]
-    bucket_speed = brand_ai_profile["bucket"]
-    preliminary_fill = int(
-        max(15, min(100, 18 + digging_depth * 0.92 - bucket_speed * 0.08))
-    )
-    if preliminary_fill >= 80:
-        digging_depth = max(20, digging_depth - 8)
-        boom_action = "버켓 적재율 상승 · 붐 UP"
-    elif preliminary_fill <= 55:
-        digging_depth = min(95, digging_depth + 7)
-        boom_action = "버켓 적재율 부족 · 붐 DOWN"
-    else:
-        boom_action = "버켓 적재율 안정 · 붐 위치 유지"
-    bucket_fill_rate = int(
-        max(15, min(100, 18 + digging_depth * 0.92 - bucket_speed * 0.08))
-    )
-    material_supply = bucket_fill_rate
-    boom_speed = brand_ai_profile["boom"]
-    feeder_speed = brand_ai_profile["feeder"]
-    gantry_speed = brand_ai_profile["gantry"]
-    profile_name = selected_brand if selected_brand != "직접 입력" else "전체 평균"
-    ai_decision = (
-        f"{profile_name} 과거 하역특성 분석 · {boom_action} · "
-        f"추천속도 BE {bucket_speed}% / BOOM {boom_speed}% / "
-        f"FEEDER {feeder_speed}% / GANTRY {gantry_speed}% · "
-        f"CSU 1대 12h 기준 {brand_reference_per_csu:,.0f}톤 반영"
-    )
-else:
-    digging_depth = manual_digging_depth
-    bucket_speed = manual_speed
-    bucket_fill_rate = int(
-        max(0, min(100, 18 + digging_depth * 0.92 - bucket_speed * 0.08))
-    )
-    material_supply = bucket_fill_rate
-    boom_speed = manual_boom_speed
-    feeder_speed = manual_feeder_speed
-    gantry_speed = manual_gantry_speed
-    ai_decision = "작업자 설정 속도로 운전"
-
-if mode == "AI 자동":
-    st.markdown("#### 🤖 브랜드별 AI 최적 운전 추천")
-    rec_1, rec_2, rec_3, rec_4, rec_5 = st.columns(5)
-    rec_1.metric("버켓 속도", f"{bucket_speed}%")
-    rec_2.metric("BOOM BC", f"{boom_speed}%")
-    rec_3.metric("FEEDER BC", f"{feeder_speed}%")
-    rec_4.metric("GANTRY BC", f"{gantry_speed}%")
-    rec_5.metric("디깅 깊이", f"{digging_depth}%")
-    st.caption(
-        f"{profile_name} 최근 2년 하역실적을 반영한 발표용 추천값입니다. "
-        "실제 적용 시 현장 계측 데이터 학습으로 보정합니다."
-    )
-
-# 사행 위험도는 감지 신호, 버켓 적재율, 컨베이어 간 속도 편차를 함께 반영한다.
-speed_imbalance = abs(boom_speed - feeder_speed) + abs(feeder_speed - gantry_speed)
-misalignment_risk = int(
-    max(
-        0,
-        min(
-            100,
-            misalignment_signal * 0.80
-            + speed_imbalance * 0.85
-            + max(0, bucket_fill_rate - 72) * 0.65,
-        ),
-    )
+# 브랜드별 발표용 운전값에서 시뮬레이션 설정값을 정한다.
+digging_depth = brand_ai_profile["depth"]
+bucket_speed = brand_ai_profile["bucket"]
+preliminary_fill = int(
+    max(15, min(100, 18 + digging_depth * 0.92 - bucket_speed * 0.08))
 )
-
-if misalignment_risk >= 80:
-    misalignment_level = "위험"
-elif misalignment_risk >= 55:
-    misalignment_level = "주의"
-else:
-    misalignment_level = "정상"
-
-preventive_action = "현재 속도 유지"
-if mode == "AI 자동" and misalignment_risk >= 80:
-    bucket_speed = max(25, bucket_speed - 12)
-    boom_speed = max(25, boom_speed - 8)
-    feeder_speed = max(25, feeder_speed - 10)
-    gantry_speed = max(25, gantry_speed - 8)
-    preventive_action = "투입량 급감속 · 전 BC 감속 · 안전 인터록 대기"
-    ai_decision += (
-        f" · 사행 위험 {misalignment_risk}% → 예방제어 "
-        f"{bucket_speed}/{boom_speed}/{feeder_speed}/{gantry_speed}%"
-    )
-elif mode == "AI 자동" and misalignment_risk >= 55:
-    bucket_speed = max(30, bucket_speed - 6)
-    boom_speed = max(30, boom_speed - 4)
-    feeder_speed = max(30, feeder_speed - 6)
-    gantry_speed = max(30, gantry_speed - 4)
-    preventive_action = "버켓 투입량 감소 · 컨베이어 단계 감속"
-    ai_decision += (
-        f" · 사행 주의 {misalignment_risk}% → 예방 감속 "
-        f"{bucket_speed}/{boom_speed}/{feeder_speed}/{gantry_speed}%"
-    )
-elif mode == "수동" and misalignment_risk >= 55:
-    preventive_action = "작업자 확인 및 감속 권고"
-
-if mode == "AI 자동" and misalignment_risk >= 55:
-    bucket_fill_rate = int(
-        max(15, min(100, 18 + digging_depth * 0.92 - bucket_speed * 0.08))
-    )
-    material_supply = bucket_fill_rate
-
-if "previous_bucket_speed" not in st.session_state:
-    st.session_state.previous_bucket_speed = bucket_speed
-if "conveyor_flush_deadline" not in st.session_state:
-    st.session_state.conveyor_flush_deadline = None
-
-previous_bucket_speed = st.session_state.previous_bucket_speed
-
-if (
-    st.session_state.csu_running
-    and mode == "수동"
-    and bucket_speed == 0
-    and previous_bucket_speed > 0
-):
-    st.session_state.conveyor_flush_deadline = time.time() + 180
-
-if bucket_speed > 0 or not st.session_state.csu_running:
-    st.session_state.conveyor_flush_deadline = None
-
-flush_deadline = st.session_state.conveyor_flush_deadline
-flush_remaining = max(0, int(flush_deadline - time.time())) if flush_deadline else 0
-flushing = (
-    st.session_state.csu_running
-    and bucket_speed == 0
-    and flush_deadline is not None
-    and flush_remaining > 0
+if preliminary_fill >= 80:
+    digging_depth = max(20, digging_depth - 8)
+elif preliminary_fill <= 55:
+    digging_depth = min(95, digging_depth + 7)
+bucket_fill_rate = int(
+    max(15, min(100, 18 + digging_depth * 0.92 - bucket_speed * 0.08))
 )
+material_supply = bucket_fill_rate
+boom_speed = brand_ai_profile["boom"]
+feeder_speed = brand_ai_profile["feeder"]
+gantry_speed = brand_ai_profile["gantry"]
+
 running = st.session_state.csu_running and bucket_speed > 0
-conveyor_running = running or flushing
-st.session_state.previous_bucket_speed = bucket_speed
+conveyor_running = running
 
 if running:
     # 호퍼 로드셀의 측정 중량을 먼저 산출하고,
@@ -447,50 +343,19 @@ if running:
         min(100.0, 9 + gantry_speed * 0.45 + unloading / 120)
         if gantry_speed > 0 else 0.0
     )
-    loadcell_status = "로드셀 측정 중 · 하역량 연동"
-elif flushing:
-    remaining_ratio = flush_remaining / 180
-    hopper_load = min(
-        50.0,
-        (material_supply * 0.43 + previous_bucket_speed * 0.045)
-        * remaining_ratio,
-    )
-    unloading = (
-        hopper_load
-        * feeder_speed
-        * 0.72
-        * brand_performance_factor
-        * UNLOADING_RATE_CALIBRATION_FACTOR
-        if boom_speed > 0 and feeder_speed > 0 and gantry_speed > 0
-        else 0.0
-    )
-    motor_load = bucket_torque = 0.0
-    boom_motor_load = min(100.0, 8 + boom_speed * 0.45) if boom_speed > 0 else 0.0
-    boom_torque = min(100.0, 6 + boom_speed * 0.35) if boom_speed > 0 else 0.0
-    feeder_motor_load = (
-        min(100.0, 10 + feeder_speed * 0.48 + hopper_load * 0.40)
-        if feeder_speed > 0 else 0.0
-    )
-    feeder_torque = (
-        min(100.0, 8 + feeder_speed * 0.40 + hopper_load * 0.50)
-        if feeder_speed > 0 else 0.0
-    )
-    gantry_motor_load = min(100.0, 7 + gantry_speed * 0.42) if gantry_speed > 0 else 0.0
-    gantry_torque = min(100.0, 6 + gantry_speed * 0.35) if gantry_speed > 0 else 0.0
-    loadcell_status = "벨트 잔량 배출 중"
+    loadcell_status = "시뮬레이션 값 · 실제 계측값 아님"
 else:
     unloading = motor_load = bucket_torque = hopper_load = 0.0
     boom_motor_load = boom_torque = 0.0
     feeder_motor_load = feeder_torque = 0.0
     gantry_motor_load = gantry_torque = 0.0
-    loadcell_status = "로드셀 대기"
+    loadcell_status = "시뮬레이션 대기"
 
-estimated_hours = ship_cargo / unloading if unloading > 0 else 0.0
 # 최근 2년 브랜드 실적을 CSU 1대·12시간 기준으로 환산한 고정 비교값이다.
 # 현재 운전조건에 따라 변하는 값은 unloading(t/h)만 사용한다.
 daily_unloading = brand_reference_per_csu
 
-# 직전 화면 갱신 이후의 하역량을 누적한다. 정지 후에도 누적값은 유지된다.
+# 직전 화면 갱신 이후의 하역량을 누적한다. 다시 실행하면 처음부터 다시 센다.
 accumulation_now = time.time()
 accumulation_seconds = max(
     0.0,
@@ -503,161 +368,53 @@ st.session_state.last_accumulation_time = accumulation_now
 st.session_state.last_unloading_rate = unloading if conveyor_running else 0.0
 actual_unloaded = st.session_state.actual_unloaded_tons
 
-if running:
-    st.success(
-        f"🟢 조업 중 · {mode} · 버켓 속도 {bucket_speed}% · "
-        f"{loadcell_status} · AI 판단: {ai_decision}"
-    )
-elif flushing:
-    st.warning(
-        f"🟠 버켓 정지 · 컨베이어 잔량 처리 중 · "
-        f"{flush_remaining // 60:02d}:{flush_remaining % 60:02d} 후 자동 정지"
-    )
-else:
-    st.error("🔴 조업 정지 · 시뮬레이터 정지")
 
-
-def render_flush_countdown() -> None:
-    deadline = st.session_state.conveyor_flush_deadline
-    if deadline is None:
-        return
-
-    remaining = max(0, int(deadline - time.time()))
-    if remaining <= 0:
-        st.session_state.conveyor_flush_deadline = None
-        st.session_state.csu_running = False
-        st.rerun()
-
+# 4. 추천 하역률 및 추천 근거
+st.markdown("#### 추천 하역률")
+if not running:
     st.info(
-        f"⏳ 컨베이어 잔량 처리 남은 시간 "
-        f"{remaining // 60:02d}:{remaining % 60:02d} · 완료 후 자동 정지"
+        "시뮬레이션 실행 전입니다. '시뮬레이션 실행'을 누르면 "
+        "선택한 브랜드 기준의 참고 하역률이 표시됩니다."
     )
-
-
-render_flush_countdown()
-
-
-def render_ai_live_control() -> None:
-    """Show stable closed-loop control values."""
-    if mode != "AI 자동":
-        st.caption("수동 모드 · 작업자가 각 설비 속도를 직접 설정합니다.")
-        return
-
-    if not running:
-        st.info("🤖 AI 자동제어 대기 · 조업 착수 후 실시간 속도 보정을 시작합니다.")
-        return
-
-    live_html = f"""
-<!doctype html>
-<html lang="ko">
-<head>
-<meta charset="utf-8">
-<style>
-*{{box-sizing:border-box}} body{{margin:0;background:transparent;color:#eef8ff;
-font-family:Arial,"Malgun Gothic",sans-serif}}
-.title{{font-size:18px;font-weight:850;margin:0 0 10px}}
-.grid{{display:grid;grid-template-columns:repeat(9,1fr);gap:8px}}
-.card{{min-height:70px;padding:10px 12px;border:1px solid #28536e;border-radius:9px;
-background:linear-gradient(180deg,#0a263a,#061827)}}
-.name{{font-size:10px;color:#8eb4c9}} .value{{margin-top:7px;font-size:20px;font-weight:850}}
-.decision{{margin-top:9px;padding:9px 12px;border:1px solid #27795a;border-radius:8px;
-background:#08372f;color:#75f2ac;font-size:12px;font-weight:750}}
-.decision.warn{{border-color:#d99120;background:#4a3109;color:#ffd06b}}
-</style>
-</head>
-<body>
-<div class="title">🤖 AI 실시간 자동제어</div>
-<div class="grid">
- <div class="card"><div class="name">버켓 속도</div><div class="value" id="bucket"></div></div>
- <div class="card"><div class="name">디깅 깊이</div><div class="value" id="depth"></div></div>
- <div class="card"><div class="name">버켓 적재율</div><div class="value" id="fill"></div></div>
- <div class="card"><div class="name">BOOM BC</div><div class="value" id="boom"></div></div>
- <div class="card"><div class="name">FEEDER BC</div><div class="value" id="feeder"></div></div>
- <div class="card"><div class="name">GANTRY BC</div><div class="value" id="gantry"></div></div>
- <div class="card"><div class="name">실시간 하역량</div><div class="value" id="rate"></div></div>
- <div class="card"><div class="name">브랜드 기준 일 하역량</div><div class="value" id="dayrate"></div></div>
- <div class="card"><div class="name">실제 누적 하역량</div><div class="value" id="actualrate"></div></div>
-</div>
-<div class="decision" id="decision"></div>
-<script>
-const baseBucket={bucket_speed}, baseDepth={digging_depth};
-const baseBoom={boom_speed}, baseFeeder={feeder_speed};
-const baseGantry={gantry_speed}, supply={material_supply};
-const brandFactor={brand_performance_factor:.6f};
-const rateCalibration={UNLOADING_RATE_CALIBRATION_FACTOR:.6f};
- const fixedDaily={brand_reference_per_csu:.6f};
-const rateLimit={brand_reference_hourly * 1.08:.6f};
-let actualTons={actual_unloaded:.6f}, previousTick=Date.now();
-function clamp(v,a,b){{return Math.max(a,Math.min(b,v));}}
-function update(){{
- const currentTick=Date.now();
- const elapsedSeconds=Math.max(0,(currentTick-previousTick)/1000);
- previousTick=currentTick;
- const phase=Date.now()/3000, sw=Math.sin(phase), lw=Math.sin(phase*.73+1.2);
- let bucket=Math.round(clamp(baseBucket+sw*3,30,90));
- let depth=Math.round(clamp(baseDepth-lw*5,20,95));
- let fill=Math.round(clamp(18+depth*.92-bucket*.08,15,100));
- const boom=Math.round(clamp(baseBoom+sw*2,35,100));
- let feeder=Math.round(clamp(baseFeeder+lw*3,35,100));
- const gantry=Math.round(clamp(baseGantry+(sw+lw)*1.5,35,100));
- let hopper=Math.min(50,fill*.43+bucket*.045-(feeder-baseFeeder)*.08);
- let rate=hopper*bucket*.86*(feeder/Math.max(1,baseFeeder))*brandFactor*rateCalibration;
- let overLimit=rate>rateLimit;
- if(overLimit){{
-   bucket=Math.max(30,bucket-4);
-   depth=Math.max(20,depth-6);
-   fill=Math.round(clamp(18+depth*.92-bucket*.08,15,100));
-   feeder=Math.min(100,feeder+2);
-   hopper=Math.min(50,fill*.43+bucket*.045-(feeder-baseFeeder)*.08);
-   rate=hopper*bucket*.86*(feeder/Math.max(1,baseFeeder))*brandFactor*rateCalibration;
- }}
- const load=Math.min(100,16+bucket*.66+fill*.14);
- let reason="부하 안정 → 최적 하역량 유지";
- if(overLimit) reason="⚠ 하역량 기준 초과 → 붐 UP·버켓 감속·FEEDER BC 자동제어 진행";
- else if(hopper>=40){{depth=Math.max(20,depth-3);reason="호퍼 중량 상승 → 붐 UP·FEEDER 증속";}}
- else if(load>=80) reason="BE DRIVE 부하 상승 → 버켓 속도 미세 감속";
- else if(hopper<30){{depth=Math.min(95,depth+3);reason="버켓 적재율 부족 → 붐 DOWN·디깅 깊이 증가";}}
- document.getElementById("bucket").textContent=bucket+" %";
- document.getElementById("depth").textContent=depth+" %";
- document.getElementById("fill").textContent=fill+" %";
- document.getElementById("boom").textContent=boom+" %";
- document.getElementById("feeder").textContent=feeder+" %";
- document.getElementById("gantry").textContent=gantry+" %";
- document.getElementById("rate").textContent=Math.round(rate).toLocaleString()+" t/h";
- document.getElementById("dayrate").textContent=Math.round(fixedDaily).toLocaleString()+" t/day";
- actualTons+=rate*elapsedSeconds/3600;
- document.getElementById("actualrate").textContent=actualTons.toFixed(1)+" t";
- const decision=document.getElementById("decision");
- decision.className=overLimit?"decision warn":"decision";
- decision.textContent="AI 판단: "+reason+" · BE DRIVE 부하 "+load.toFixed(1)+"%";
-}}
-update(); window.setInterval(update,1000);
-</script>
-</body>
-</html>
-"""
-    components.html(live_html, height=175, scrolling=False)
-
-
-render_ai_live_control()
-
-
-st.subheader("⚠️ 사행·편적 AI 예방감시")
-risk_1, risk_2, risk_3, risk_4 = st.columns(4)
-risk_1.metric("사행 위험도", f"{misalignment_risk} %")
-risk_2.metric("위험 등급", misalignment_level)
-risk_3.metric("감지 신호", f"{misalignment_signal} %")
-risk_4.metric("AI 예방조치", preventive_action)
-
-if misalignment_level == "위험":
-    st.error(
-        f"🔴 사행 위험 {misalignment_risk}% · {preventive_action} · "
-        "현장 안전 인터록과 운전자 확인이 우선입니다."
-    )
-elif misalignment_level == "주의":
-    st.warning(f"🟡 사행 주의 {misalignment_risk}% · {preventive_action}")
 else:
-    st.success(f"🟢 사행 정상 {misalignment_risk}% · 편적 상태 안정")
+    sim_chute_count = active_conditions["chute_count"]
+    sim_chute_minutes = active_conditions["chute_minutes"]
+    sim_chute_average = sim_chute_minutes / sim_chute_count if sim_chute_count > 0 else 0.0
+    safe_sim_brand_label = html.escape(sim_cargo_brand or "미입력")
+    if sim_has_history:
+        reco_badge = "가상 조건 기반 참고값"
+        reco_brand_line = (
+            f"기준 브랜드: {safe_sim_brand_label} · 최근 2년 평균 "
+            f"{brand_reference_daily:,} T/D · 총 {brand_total_tons:,}t "
+            "(집계 원본 재검증 필요)"
+        )
+    else:
+        reco_badge = "이력 부족 · 전체 평균 기준 참고값"
+        reco_brand_line = (
+            f"기준 브랜드: {safe_sim_brand_label} · 브랜드 실적 없음 → "
+            f"전체 평균 {OVERALL_AVERAGE_DAILY_RATE:,} T/D 기준"
+        )
+    if sim_chute_count > 0:
+        reco_chute_line = (
+            f"막힘 조건(가상값): {sim_chute_count}회 · 누적 {sim_chute_minutes:,.0f}분 · "
+            f"건당 평균 {sim_chute_average:.1f}분 → 이번 추천 수치에는 반영하지 않음"
+        )
+    else:
+        reco_chute_line = "막힘 조건(가상값): 막힘 없음 → 이번 추천 수치에는 반영하지 않음"
+    st.markdown(
+        '<div class="reco-card">'
+        f'<span class="reco-badge">{reco_badge}</span>'
+        '<div class="reco-label">추천 하역률 (참고)</div>'
+        f'<div class="reco-value">{unloading:,.0f}<span>t/h</span></div>'
+        '<ul class="reco-basis">'
+        f"<li>{reco_brand_line}</li>"
+        f"<li>{reco_chute_line}</li>"
+        "<li>산출 방식: 브랜드별 발표용 운전값을 기존 시뮬레이션 식에 넣은 결과입니다. "
+        "실제 막힘 이력으로 학습·검증한 추천이 아닙니다.</li>"
+        "</ul>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 animation_state = "running" if running else "paused"
@@ -668,25 +425,13 @@ gantry_cycle_seconds = max(0.55, 3.0 - gantry_speed * 0.023)
 boom_animation_state = "running" if conveyor_running and boom_speed > 0 else "paused"
 feeder_animation_state = "running" if conveyor_running and feeder_speed > 0 else "paused"
 gantry_animation_state = "running" if conveyor_running and gantry_speed > 0 else "paused"
-boom_luff_state = "running" if mode == "AI 자동" and running else "paused"
+boom_luff_state = "running" if running else "paused"
 be_depth_offset = round((digging_depth - 60) * 0.35, 1)
 
-flush_stop_script = ""
-if flushing:
-    flush_stop_script = f"""
-<script>
-window.setTimeout(() => {{
-  const twin = document.querySelector(".twin");
-  if (twin) twin.classList.add("flush-complete");
-}}, {max(0, flush_remaining) * 1000});
-</script>
-"""
-status_text = "조업 중" if running else ("잔량 처리 중" if flushing else "조업 정지")
-status_color = "#2bd477" if running else ("#ffad42" if flushing else "#ef5b5b")
+status_text = "시뮬레이션 실행 중" if running else "시뮬레이션 대기"
+status_color = "#2bd477" if running else "#ffad42"
 
-safe_mode = html.escape(mode)
-safe_decision = html.escape(ai_decision)
-safe_cargo_brand = html.escape(cargo_brand.strip() or "미입력")
+safe_cargo_brand = html.escape(sim_cargo_brand or "미입력")
 
 digital_twin_html = f"""
 <!doctype html>
@@ -739,10 +484,6 @@ animation:bucketLoop {cycle_seconds * 8:.3f}s linear infinite;animation-play-sta
 .direction{{fill:none;stroke:#ef861c;stroke-width:7;stroke-linecap:round;marker-end:url(#direction-arrow)}}
 .be-depth{{transform:translateY({be_depth_offset}px);
 animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_state}}}
-.flush-complete .cargo,
-.flush-complete .cargo-sm,
-.flush-complete .drop,
-.flush-complete .bucketset{{animation-play-state:paused!important}}
 .lbl{{fill:#061725eF;stroke:#6d8998;stroke-width:1}} .txt{{fill:#f3f8fa;font-size:11px;font-weight:700}}
 @keyframes flow{{to{{stroke-dashoffset:-92}}}}
 @keyframes fall{{to{{stroke-dashoffset:-64}}}}
@@ -764,25 +505,23 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
 <div class="state">● {status_text}</div></div>
 
 <div class="panel left">
-  <div class="k">운전 모드</div><div class="v">{safe_mode}</div>
+  <div class="k">시뮬레이션 상태</div><div class="v">{"실행 중" if running else "대기"}</div>
   <div class="k">화물 브랜드</div><div class="v">{safe_cargo_brand}</div>
   <div class="k">브랜드 기준 하역량 (CSU 1대·12h)</div><div class="v">{brand_reference_per_csu:,.0f} t</div>
-  <div class="k">선박 적재 화물량</div><div class="v">{ship_cargo:,.0f} t</div>
   <div class="k">하역량</div><div class="v" id="scene-rate">{unloading:,.0f} t/h</div>
   <div class="k">브랜드 기준 일 하역량</div><div class="v" id="scene-dayrate">{daily_unloading:,.0f} t/day</div>
-  <div class="k">실제 누적 하역량</div><div class="v" id="actual-unloaded">{actual_unloaded:.1f} t</div>
-  <div class="k">예상 하역시간</div><div class="v">{estimated_hours:.1f} h</div>
+  <div class="k">누적 하역량 (시뮬레이션)</div><div class="v" id="actual-unloaded">{actual_unloaded:.1f} t</div>
   <div class="k">호퍼 로드셀</div><div class="v accent">{hopper_load:.1f} t</div>
   <div class="k">{loadcell_status}</div>
 </div>
 <div class="panel right">
-  <div class="k">AI CONTROL</div><div class="v good">{safe_mode}</div>
+  <div class="k">시뮬레이션 설정</div><div class="v good">가상 조건</div>
   <div class="k">버켓 속도</div><div class="v">{bucket_speed} %</div>
   <div class="k">디깅 깊이 / 버켓 적재율</div>
   <div class="v">{digging_depth} / {bucket_fill_rate} %</div>
   <div class="k">BOOM / FEEDER / GANTRY</div>
   <div class="v">{boom_speed} / {feeder_speed} / {gantry_speed} %</div>
-  <div class="k">AI 판단</div><div class="decision">{safe_decision}</div>
+  <div class="k">비고</div><div class="decision">브랜드별 발표용 운전값 기준 · 실제 계측값이 아닙니다</div>
 </div>
 
 <svg class="machine" viewBox="0 0 1400 620" preserveAspectRatio="xMidYMid meet">
@@ -918,21 +657,19 @@ animation:digDepth 4.5s ease-in-out infinite;animation-play-state:{boom_luff_sta
  <div class="tile"><div class="tn">호퍼 로드셀</div><div class="tv">{hopper_load:.1f} t</div></div>
  <div class="tile"><div class="tn">하역량</div><div class="tv" id="bottom-rate">{unloading:,.0f} t/h</div></div>
  <div class="tile"><div class="tn">브랜드 기준 일 하역량</div><div class="tv" id="bottom-dayrate">{daily_unloading:,.0f} t/day</div></div>
- <div class="tile"><div class="tn">실제 누적 하역량</div><div class="tv" id="actual-bottom">{actual_unloaded:.1f} t</div></div>
+ <div class="tile"><div class="tn">누적 하역량 (시뮬레이션)</div><div class="tv" id="actual-bottom">{actual_unloaded:.1f} t</div></div>
 </div>
 </div>
 <script>
 let sceneActual={actual_unloaded:.6f};
 let scenePrevious=Date.now();
 const sceneBaseRate={unloading:.6f};
-const sceneManual={str(mode == "수동" and running).lower()};
 const sceneFixedDaily={brand_reference_per_csu:.6f};
 window.setInterval(()=>{{
  const now=Date.now();
  const seconds=Math.max(0,(now-scenePrevious)/1000);
  scenePrevious=now;
- const phase=now/3000;
- const sceneRate=sceneBaseRate*(sceneManual ? 1+Math.sin(phase)*.025+Math.sin(phase*.71+1.1)*.012 : 1);
+ const sceneRate=sceneBaseRate;
  sceneActual+=sceneRate*seconds/3600;
  const value=sceneActual.toFixed(1)+" t";
  const rateValue=Math.round(sceneRate).toLocaleString()+" t/h";
@@ -951,443 +688,110 @@ window.setInterval(()=>{{
  if(bottomDay) bottomDay.textContent=dayValue;
 }},1000);
 </script>
-{flush_stop_script}
 </body>
 </html>
 """
 
 components.html(digital_twin_html, height=710, scrolling=False)
 
-if running:
-    live_data_html = f"""
+conveyor_state_text = "시뮬레이션 실행 중" if running else "시뮬레이션 대기"
+conveyor_state_class = "on" if running else "wait"
+conveyor_initial = {
+    "bs": boom_speed if conveyor_running else 0,
+    "bml": boom_motor_load,
+    "bmt": boom_torque,
+    "fs": feeder_speed if conveyor_running else 0,
+    "fml": feeder_motor_load,
+    "fmt": feeder_torque,
+    "gs": gantry_speed if conveyor_running else 0,
+    "gml": gantry_motor_load,
+    "gmt": gantry_torque,
+}
+
+live_data_html = f"""
 <!doctype html><html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 *{{box-sizing:border-box}}body{{margin:0;background:transparent;color:#f2f8fc;
 font-family:Arial,"Malgun Gothic",sans-serif}}
-h2{{font-size:21px;margin:0 0 12px}}h3{{font-size:15px;margin:13px 0 8px}}
-.grid6{{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}}
-.grid3{{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}}
-.card{{min-height:70px;padding:11px;border:1px solid #29546d;border-radius:9px;
+h2{{font-size:21px;margin:0 0 6px;display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px}}
+.state{{font-size:12px;font-weight:800;padding:3px 10px;border-radius:12px;border:1px solid}}
+.state.on{{color:#2bd477;border-color:#2bd477;background:#0a3a29}}
+.state.wait{{color:#ffad42;border-color:#ffad42;background:#3a2a0a}}
+.note{{font-size:12px;color:#a9c8d9;margin:0 0 8px}}
+.tbl{{border:1px solid #29546d;border-radius:9px;overflow:hidden;
 background:linear-gradient(180deg,#0a263a,#061827)}}
-.name{{font-size:10px;color:#91b4c8}}.value{{font-size:21px;font-weight:850;margin-top:7px}}
+table{{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed}}
+th,td{{padding:10px 14px;border-bottom:1px solid #1f4259}}
+thead th{{font-size:13px;font-weight:800;color:#d6e9f4;background:#0e3048;
+text-align:right;line-height:1.3}}
+thead th:first-child,tbody th{{text-align:left}}
+tbody th{{font-size:15px;font-weight:850;color:#fff}}
+td{{font-size:22px;font-weight:850;color:#fff;text-align:right;
+font-variant-numeric:tabular-nums}}
+tbody tr:nth-child(even) th,tbody tr:nth-child(even) td{{background:#0b2b42}}
+tbody tr:last-child th,tbody tr:last-child td{{border-bottom:0}}
+@media (max-width:560px){{
+ h2{{font-size:17px}}
+ th,td{{padding:8px 6px}}
+ thead th{{font-size:11px}}
+ tbody th{{font-size:12px}}
+ td{{font-size:17px}}
+}}
 </style></head><body>
-<h2>실시간 운전 데이터</h2>
-<div class="grid6">
- <div class="card"><div class="name">하역량</div><div class="value" id="u"></div></div>
- <div class="card"><div class="name">브랜드 기준 일 하역량</div><div class="value" id="ud"></div></div>
- <div class="card"><div class="name">실제 누적 하역량</div><div class="value" id="ua"></div></div>
- <div class="card"><div class="name">버켓 모터 부하</div><div class="value" id="bl"></div></div>
- <div class="card"><div class="name">버켓 토크</div><div class="value" id="bt"></div></div>
- <div class="card"><div class="name">호퍼 로드셀</div><div class="value" id="hp"></div></div>
-</div>
-<h2 style="margin-top:18px">컨베이어 실시간 운전 데이터</h2>
-<h3>BOOM BC</h3><div class="grid3">
- <div class="card"><div class="name">BOOM BC 벨트 속도</div><div class="value" id="bs"></div></div>
- <div class="card"><div class="name">BOOM BC 모터 부하</div><div class="value" id="bml"></div></div>
- <div class="card"><div class="name">BOOM BC 토크</div><div class="value" id="bmt"></div></div>
-</div>
-<h3>FEEDER BC</h3><div class="grid3">
- <div class="card"><div class="name">FEEDER BC 벨트 속도</div><div class="value" id="fs"></div></div>
- <div class="card"><div class="name">FEEDER BC 모터 부하</div><div class="value" id="fml"></div></div>
- <div class="card"><div class="name">FEEDER BC 토크</div><div class="value" id="fmt"></div></div>
-</div>
-<h3>GANTRY BC</h3><div class="grid3">
- <div class="card"><div class="name">GANTRY BC 벨트 속도</div><div class="value" id="gs"></div></div>
- <div class="card"><div class="name">GANTRY BC 모터 부하</div><div class="value" id="gml"></div></div>
- <div class="card"><div class="name">GANTRY BC 토크</div><div class="value" id="gmt"></div></div>
+<div id="wrap">
+<h2>컨베이어 실시간 운전 데이터 <span class="state {conveyor_state_class}">{conveyor_state_text}</span></h2>
+<div class="note">시뮬레이션 값이며 실제 설비 계측값이 아닙니다.</div>
+<div class="tbl"><table>
+<colgroup><col style="width:28%"><col><col><col></colgroup>
+<thead><tr><th>설비</th><th>벨트 속도 (%)</th><th>모터 부하 (%)</th><th>토크 (%)</th></tr></thead>
+<tbody>
+<tr><th scope="row">BOOM BC</th><td id="bs">{conveyor_initial['bs']:.1f}</td><td id="bml">{conveyor_initial['bml']:.1f}</td><td id="bmt">{conveyor_initial['bmt']:.1f}</td></tr>
+<tr><th scope="row">FEEDER BC</th><td id="fs">{conveyor_initial['fs']:.1f}</td><td id="fml">{conveyor_initial['fml']:.1f}</td><td id="fmt">{conveyor_initial['fmt']:.1f}</td></tr>
+<tr><th scope="row">GANTRY BC</th><td id="gs">{conveyor_initial['gs']:.1f}</td><td id="gml">{conveyor_initial['gml']:.1f}</td><td id="gmt">{conveyor_initial['gmt']:.1f}</td></tr>
+</tbody></table></div>
 </div>
 <script>
+const live={str(running).lower()};
 const bb={bucket_speed},bd={digging_depth},bo={boom_speed},fe={feeder_speed},ga={gantry_speed};
 const brandFactor={brand_performance_factor:.6f};
 const rateCalibration={UNLOADING_RATE_CALIBRATION_FACTOR:.6f};
-const aiMode={str(mode == "AI 자동").lower()};
-const fixedDaily={brand_reference_per_csu:.6f};
 const rateLimit={brand_reference_hourly * 1.08:.6f};
 const C=(v,a,b)=>Math.max(a,Math.min(b,v)), put=(id,v)=>document.getElementById(id).textContent=v;
-let accumulated={actual_unloaded:.6f},previous=Date.now();
 function tick(){{
- const now=Date.now(),elapsed=Math.max(0,(now-previous)/1000);previous=now;
  const p=Date.now()/3000,sw=Math.sin(p),lw=Math.sin(p*.73+1.2);
- let b=aiMode?Math.round(C(bb+sw*3,30,90)):bb;
- let bs=aiMode?Math.round(C(bo+sw*2,35,100)):bo;
- let fs=aiMode?Math.round(C(fe+lw*3,35,100)):fe;
- let gs=aiMode?Math.round(C(ga+(sw+lw)*1.5,35,100)):ga;
- let depth=aiMode?Math.round(C(bd-lw*5,20,95)):bd;
+ let b=Math.round(C(bb+sw*3,30,90));
+ let bs=Math.round(C(bo+sw*2,35,100));
+ let fs=Math.round(C(fe+lw*3,35,100));
+ let gs=Math.round(C(ga+(sw+lw)*1.5,35,100));
+ let depth=Math.round(C(bd-lw*5,20,95));
  let fill=Math.round(C(18+depth*.92-b*.08,15,100));
  let hp=Math.min(50,fill*.43+b*.045-(fs-fe)*.08);
  let u=hp*b*.86*(fs/Math.max(1,fe))*brandFactor*rateCalibration;
- if(!aiMode) u*=1+sw*.025+lw*.012;
- if(aiMode && u>rateLimit){{
+ if(u>rateLimit){{
    b=Math.max(30,b-4);depth=Math.max(20,depth-6);
    fill=Math.round(C(18+depth*.92-b*.08,15,100));fs=Math.min(100,fs+2);
    hp=Math.min(50,fill*.43+b*.045-(fs-fe)*.08);
    u=hp*b*.86*(fs/Math.max(1,fe))*brandFactor*rateCalibration;
  }}
- const bl=Math.min(100,16+b*.66+fill*.14),bt=Math.min(100,14+b*.58+fill*.18);
  const bml=Math.min(100,7+bs*.42+u/900),bmt=Math.min(100,6+bs*.35);
  const fml=Math.min(100,10+fs*.48+hp*.40),fmt=Math.min(100,8+fs*.40+hp*.50);
  const gml=Math.min(100,7+gs*.42),gmt=Math.min(100,6+gs*.35);
- accumulated+=u*elapsed/3600;
- put("u",Math.round(u).toLocaleString()+" t/h");put("ud",Math.round(fixedDaily).toLocaleString()+" t/day");
- put("ua",accumulated.toFixed(1)+" t");
- put("bl",bl.toFixed(1)+" %");
- put("bt",bt.toFixed(1)+" %");put("hp",hp.toFixed(1)+" t");
- put("bs",bs+" %");put("bml",bml.toFixed(1)+" %");put("bmt",bmt.toFixed(1)+" %");
- put("fs",fs+" %");put("fml",fml.toFixed(1)+" %");put("fmt",fmt.toFixed(1)+" %");
- put("gs",gs+" %");put("gml",gml.toFixed(1)+" %");put("gmt",gmt.toFixed(1)+" %");
+ put("bs",bs.toFixed(1));put("bml",bml.toFixed(1));put("bmt",bmt.toFixed(1));
+ put("fs",fs.toFixed(1));put("fml",fml.toFixed(1));put("fmt",fmt.toFixed(1));
+ put("gs",gs.toFixed(1));put("gml",gml.toFixed(1));put("gmt",gmt.toFixed(1));
 }}
-tick();window.setInterval(tick,1000);
+function fit(){{
+ try{{
+  if(window.frameElement)
+   window.frameElement.style.height=(document.getElementById("wrap").offsetHeight+4)+"px";
+ }}catch(e){{}}
+}}
+if(live){{tick();window.setInterval(tick,1000);}}
+fit();window.addEventListener("resize",fit);
 </script></body></html>"""
-    components.html(live_data_html, height=520, scrolling=False)
-else:
-    st.subheader("실시간 운전 데이터")
-    metric_1, metric_2, metric_3, metric_4, metric_5, metric_6 = st.columns(6)
-    metric_1.metric("하역량", f"{unloading:,.0f} t/h")
-    metric_2.metric("브랜드 기준 일 하역량", f"{daily_unloading:,.0f} t/day")
-    metric_3.metric("실제 누적 하역량", f"{actual_unloaded:.1f} t")
-    metric_4.metric("버켓 모터 부하", f"{motor_load:.1f} %")
-    metric_5.metric("버켓 토크", f"{bucket_torque:.1f} %")
-    metric_6.metric("호퍼 로드셀", f"{hopper_load:.1f} t")
+components.html(live_data_html, height=300, scrolling=False)
 
-    st.subheader("컨베이어 실시간 운전 데이터")
-    st.markdown("##### BOOM BC")
-    boom_1, boom_2, boom_3 = st.columns(3)
-    boom_1.metric("BOOM BC 벨트 속도", f"{boom_speed if conveyor_running else 0} %")
-    boom_2.metric("BOOM BC 모터 부하", f"{boom_motor_load:.1f} %")
-    boom_3.metric("BOOM BC 토크", f"{boom_torque:.1f} %")
-
-    st.markdown("##### FEEDER BC")
-    feeder_1, feeder_2, feeder_3 = st.columns(3)
-    feeder_1.metric("FEEDER BC 벨트 속도", f"{feeder_speed if conveyor_running else 0} %")
-    feeder_2.metric("FEEDER BC 모터 부하", f"{feeder_motor_load:.1f} %")
-    feeder_3.metric("FEEDER BC 토크", f"{feeder_torque:.1f} %")
-
-    st.markdown("##### GANTRY BC")
-    gantry_1, gantry_2, gantry_3 = st.columns(3)
-    gantry_1.metric("GANTRY BC 벨트 속도", f"{gantry_speed if conveyor_running else 0} %")
-    gantry_2.metric("GANTRY BC 모터 부하", f"{gantry_motor_load:.1f} %")
-    gantry_3.metric("GANTRY BC 토크", f"{gantry_torque:.1f} %")
-
-
-def make_training_record(excellent: bool = False) -> dict[str, object]:
-    """현재 디지털 트윈 상태를 AI 학습용 한 행으로 만든다."""
-    now = time.time()
-    wave = math.sin(now / 3.0)
-    slow_wave = math.sin(now / 4.7 + 1.1)
-    live_rate = unloading * (1.0 + wave * 0.025 + slow_wave * 0.012) if running else 0.0
-    live_hopper = max(0.0, hopper_load + wave * 0.35) if running else 0.0
-
-    return {
-        "기록시각": datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"),
-        "데이터출처": "디지털 트윈 자동기록",
-        "조업일자": datetime.now(KST).strftime("%Y-%m-%d"),
-        "화물브랜드": cargo_brand or "미입력",
-        "운전모드": mode,
-        "조업상태": "조업 중" if running else "조업 정지",
-        "우수운전": "Y" if excellent else "N",
-        "버켓속도_pct": round(bucket_speed + (wave * 2 if mode == "AI 자동" and running else 0), 1),
-        "디깅깊이_pct": round(digging_depth - (slow_wave * 3 if mode == "AI 자동" and running else 0), 1),
-        "버켓적재율_pct": round(bucket_fill_rate + (slow_wave * 1.5 if running else 0), 1),
-        "BE모터부하_pct": round(motor_load + (wave * 0.6 if running else 0), 1),
-        "BE토크_pct": round(bucket_torque + (slow_wave * 0.6 if running else 0), 1),
-        "BOOM_BC속도_pct": boom_speed if conveyor_running else 0,
-        "BOOM_BC모터부하_pct": round(boom_motor_load, 1),
-        "BOOM_BC토크_pct": round(boom_torque, 1),
-        "FEEDER_BC속도_pct": feeder_speed if conveyor_running else 0,
-        "FEEDER_BC모터부하_pct": round(feeder_motor_load, 1),
-        "FEEDER_BC토크_pct": round(feeder_torque, 1),
-        "GANTRY_BC속도_pct": gantry_speed if conveyor_running else 0,
-        "GANTRY_BC모터부하_pct": round(gantry_motor_load, 1),
-        "GANTRY_BC토크_pct": round(gantry_torque, 1),
-        "호퍼로드셀_t": round(live_hopper, 2),
-        "실시간하역량_tph": round(live_rate, 1),
-        "브랜드기준하역량_12h_t": round(brand_reference_per_csu, 1),
-        "실제누적하역량_t": round(actual_unloaded, 2),
-        "사행감지신호_pct": misalignment_signal,
-        "사행위험도_pct": misalignment_risk,
-        "사행위험등급": misalignment_level,
-        "AI예방조치": preventive_action,
-        "AI판단": ai_decision,
-    }
-
-
-def records_to_csv(records: list[dict[str, object]]) -> bytes:
-    """엑셀에서 한글이 깨지지 않는 UTF-8 BOM CSV를 만든다."""
-    if not records:
-        return b""
-    fieldnames: list[str] = []
-    seen: set[str] = set()
-    for record in records:
-        for field in record:
-            if field not in seen:
-                fieldnames.append(field)
-                seen.add(field)
-    buffer = io.StringIO(newline="")
-    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
-    writer.writeheader()
-    writer.writerows(records)
-    return ("\ufeff" + buffer.getvalue()).encode("utf-8")
-
-
-def render_company_operation_entry() -> None:
-    """회사에서 측정한 실제 조업 결과를 학습자료로 추가한다."""
-    with st.expander("🏭 회사 실제 운전 데이터 입력", expanded=True):
-        st.caption(
-            "실제 계측값을 아는 항목만 입력하고, 확인하지 못한 값은 0으로 두면 됩니다. "
-            "CSU 1호기를 저장한 뒤 2호기를 선택해 다시 저장하면 두 호기 자료가 각각 누적됩니다. "
-            "값이 바뀔 때마다 다시 저장하면 시간순 학습자료가 됩니다."
-        )
-
-        with st.form("company_operation_form", clear_on_submit=False):
-            basic_1, basic_2, basic_3, basic_4 = st.columns(4)
-            with basic_1:
-                actual_date = st.date_input(
-                    "조업일자",
-                    value=datetime.now(KST).date(),
-                )
-            with basic_2:
-                actual_csu = st.radio(
-                    "CSU 호기",
-                    ["CSU 1호기", "CSU 2호기"],
-                    horizontal=True,
-                )
-            with basic_3:
-                actual_shift = st.selectbox("근무 구분", ["주간", "야간"])
-            with basic_4:
-                actual_brand = st.text_input(
-                    "화물 브랜드",
-                    value="",
-                    placeholder="예: POYA",
-                )
-
-            result_1, result_2, result_3, result_4 = st.columns(4)
-            with result_1:
-                scheduled_hours = st.number_input(
-                    "계획 작업시간 (h)", 1.0, 24.0, 12.0, 0.5
-                )
-            with result_2:
-                downtime_minutes = st.number_input(
-                    "라인 정지시간 (분)", 0, 1_440, 0, 5
-                )
-            with result_3:
-                stop_count = st.number_input("라인 정지 횟수", 0, 100, 0, 1)
-            with result_4:
-                actual_tons = st.number_input(
-                    "실제 하역량 (t)", 0.0, 100_000.0, 0.0, 100.0
-                )
-
-            stop_1, stop_2 = st.columns([2.0, 1.0])
-            with stop_1:
-                stop_reason = st.selectbox(
-                    "주요 정지 사유",
-                    [
-                        "정지 없음",
-                        "컨베이어 사행",
-                        "편적",
-                        "과부하",
-                        "막힘",
-                        "설비 고장",
-                        "선박 사정",
-                        "작업 대기",
-                        "기타",
-                    ],
-                )
-            with stop_2:
-                actual_excellent = st.checkbox("우수 운전 사례")
-
-            st.markdown("##### BE DRIVE 실제 계측값")
-            be_1, be_2, be_3, be_4 = st.columns(4)
-            with be_1:
-                actual_bucket_speed = st.number_input("버켓 속도 (%)", 0.0, 100.0, 0.0, 1.0)
-            with be_2:
-                actual_be_current = st.number_input("BE 전류 (A)", 0.0, 5_000.0, 0.0, 1.0)
-            with be_3:
-                actual_be_load = st.number_input("BE 모터 부하 (%)", 0.0, 100.0, 0.0, 1.0)
-            with be_4:
-                actual_be_torque = st.number_input("BE 토크 (%)", 0.0, 100.0, 0.0, 1.0)
-
-            st.markdown("##### 호퍼 및 컨베이어 실제 계측값")
-            line_1, line_2, line_3, line_4 = st.columns(4)
-            with line_1:
-                actual_hopper = st.number_input("호퍼 로드셀 (t)", 0.0, 100.0, 0.0, 0.5)
-            with line_2:
-                actual_boom_speed = st.number_input("BOOM BC 속도 (%)", 0.0, 100.0, 0.0, 1.0)
-            with line_3:
-                actual_boom_load = st.number_input("BOOM BC 부하 (%)", 0.0, 100.0, 0.0, 1.0)
-            with line_4:
-                actual_boom_torque = st.number_input("BOOM BC 토크 (%)", 0.0, 100.0, 0.0, 1.0)
-
-            line_5, line_6, line_7 = st.columns(3)
-            with line_5:
-                actual_feeder_speed = st.number_input("FEEDER BC 속도 (%)", 0.0, 100.0, 0.0, 1.0)
-            with line_6:
-                actual_feeder_load = st.number_input("FEEDER BC 부하 (%)", 0.0, 100.0, 0.0, 1.0)
-            with line_7:
-                actual_feeder_torque = st.number_input("FEEDER BC 토크 (%)", 0.0, 100.0, 0.0, 1.0)
-
-            line_8, line_9, line_10 = st.columns(3)
-            with line_8:
-                actual_gantry_speed = st.number_input("GANTRY BC 속도 (%)", 0.0, 100.0, 0.0, 1.0)
-            with line_9:
-                actual_gantry_load = st.number_input("GANTRY BC 부하 (%)", 0.0, 100.0, 0.0, 1.0)
-            with line_10:
-                actual_gantry_torque = st.number_input("GANTRY BC 토크 (%)", 0.0, 100.0, 0.0, 1.0)
-
-            actual_note = st.text_area(
-                "운전 특이사항",
-                placeholder="예: A801 사행 경보로 25분 정지 후 벨트 속도 조정",
-            )
-            save_actual = st.form_submit_button(
-                "입력값 적용 및 실제 운전 데이터 저장",
-                use_container_width=True,
-            )
-
-        st.caption(
-            "계측값이 바뀌면 값을 수정한 뒤 다시 저장하세요. "
-            "저장할 때마다 해당 CSU 호기와 저장시각이 별도 행으로 누적됩니다."
-        )
-
-        if save_actual:
-            effective_hours = max(0.0, scheduled_hours - downtime_minutes / 60.0)
-            gross_rate = actual_tons / scheduled_hours if scheduled_hours > 0 else 0.0
-            net_rate = actual_tons / effective_hours if effective_hours > 0 else 0.0
-            availability = effective_hours / scheduled_hours * 100 if scheduled_hours > 0 else 0.0
-            normalized_brand = actual_brand.strip() or "미입력"
-            matched_brand = next(
-                (
-                    name
-                    for name in BRAND_UNLOADING_STATS
-                    if name.casefold() == normalized_brand.casefold()
-                ),
-                None,
-            )
-            actual_brand_daily = (
-                BRAND_UNLOADING_STATS[matched_brand][1]
-                if matched_brand
-                else OVERALL_AVERAGE_DAILY_RATE
-            )
-
-            actual_record = {
-                "기록시각": datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S"),
-                "데이터출처": "회사 실제 운전 입력",
-                "조업일자": actual_date.strftime("%Y-%m-%d"),
-                "CSU호기": actual_csu,
-                "근무구분": actual_shift,
-                "화물브랜드": normalized_brand,
-                "운전모드": "실제 조업",
-                "조업상태": "근무 실적 저장",
-                "우수운전": "Y" if actual_excellent else "N",
-                "계획작업시간_h": round(scheduled_hours, 2),
-                "라인정지시간_min": downtime_minutes,
-                "라인정지횟수": stop_count,
-                "주요정지사유": stop_reason,
-                "실가동시간_h": round(effective_hours, 2),
-                "설비가동률_pct": round(availability, 1),
-                "근무시간기준하역률_tph": round(gross_rate, 1),
-                "실가동기준하역률_tph": round(net_rate, 1),
-                "버켓속도_pct": actual_bucket_speed,
-                "BE전류_A": actual_be_current,
-                "BE모터부하_pct": actual_be_load,
-                "BE토크_pct": actual_be_torque,
-                "BOOM_BC속도_pct": actual_boom_speed,
-                "BOOM_BC모터부하_pct": actual_boom_load,
-                "BOOM_BC토크_pct": actual_boom_torque,
-                "FEEDER_BC속도_pct": actual_feeder_speed,
-                "FEEDER_BC모터부하_pct": actual_feeder_load,
-                "FEEDER_BC토크_pct": actual_feeder_torque,
-                "GANTRY_BC속도_pct": actual_gantry_speed,
-                "GANTRY_BC모터부하_pct": actual_gantry_load,
-                "GANTRY_BC토크_pct": actual_gantry_torque,
-                "호퍼로드셀_t": actual_hopper,
-                "실시간하역량_tph": round(net_rate, 1),
-                "브랜드기준하역량_12h_t": round(actual_brand_daily / REFERENCE_CSU_COUNT, 1),
-                "실제누적하역량_t": round(actual_tons, 1),
-                "AI예방조치": "실제 운전자료 분석 대기",
-                "AI판단": "회사 실제 운전 데이터",
-                "운전특이사항": actual_note.strip(),
-            }
-            st.session_state.training_records.append(actual_record)
-            st.success(
-                f"실제 운전자료를 저장했습니다 · {normalized_brand} · "
-                f"{actual_tons:,.0f}톤 · 가동률 {availability:.1f}% · "
-                f"실가동 하역률 {net_rate:,.0f} t/h"
-            )
-
-
-@st.fragment(run_every=5)
-def render_training_recorder() -> None:
-    st.subheader("🧠 AI 학습용 데이터 수집")
-    st.info(
-        "5초 자동 수집은 디지털 트윈의 버켓·컨베이어 속도, 모터 부하·토크, "
-        "호퍼 로드셀, 하역량, 사행 위험도와 AI 판단을 저장합니다. "
-        "회사 실제 계측값은 값이 바뀔 때마다 위 입력 화면에서 저장 버튼을 눌러 기록합니다. "
-        "모든 값은 임시 세션에 저장되므로 작업 종료 전에 반드시 CSV를 다운로드하세요."
-    )
-    start_record, stop_record, mark_excellent, clear_record = st.columns(4)
-
-    with start_record:
-        if st.button("● 데이터 수집 시작", use_container_width=True):
-            st.session_state.recording_enabled = True
-            st.session_state.last_record_time = 0.0
-    with stop_record:
-        if st.button("■ 데이터 수집 종료", use_container_width=True):
-            st.session_state.recording_enabled = False
-    with mark_excellent:
-        if st.button(
-            "★ 우수 운전 표시",
-            use_container_width=True,
-            disabled=not running,
-        ):
-            st.session_state.training_records.append(make_training_record(excellent=True))
-            st.success("현재 운전상태를 우수 운전 사례로 저장했습니다.")
-    with clear_record:
-        if st.button("수집 데이터 초기화", use_container_width=True):
-            st.session_state.training_records = []
-            st.session_state.last_record_time = 0.0
-
-    record_now = time.time()
-    if (
-        st.session_state.recording_enabled
-        and running
-        and record_now - st.session_state.last_record_time >= 4.5
-    ):
-        st.session_state.training_records.append(make_training_record())
-        st.session_state.last_record_time = record_now
-
-    record_count = len(st.session_state.training_records)
-    excellent_count = sum(
-        row.get("우수운전") == "Y" for row in st.session_state.training_records
-    )
-    status_text = "수집 중 · 5초 간격 임시 저장" if st.session_state.recording_enabled else "수집 대기"
-
-    csu_1_count = sum(
-        row.get("CSU호기") == "CSU 1호기" for row in st.session_state.training_records
-    )
-    csu_2_count = sum(
-        row.get("CSU호기") == "CSU 2호기" for row in st.session_state.training_records
-    )
-    info_1, info_2, info_3, info_4, info_5 = st.columns(5)
-    info_1.metric("디지털 트윈 수집", status_text)
-    info_2.metric("CSU 1호기 실제자료", f"{csu_1_count:,}건")
-    info_3.metric("CSU 2호기 실제자료", f"{csu_2_count:,}건")
-    info_4.metric("전체 수집 데이터", f"{record_count:,}건")
-    info_5.metric("우수 운전 사례", f"{excellent_count:,}건")
-
-    if st.session_state.recording_enabled and not running:
-        st.warning("조업 착수 후 데이터 자동 기록이 시작됩니다.")
-
-    st.download_button(
-        "⬇ AI 학습 데이터 CSV 다운로드",
-        data=records_to_csv(st.session_state.training_records),
-        file_name=f"CSU_AI_학습데이터_{datetime.now(KST):%Y%m%d_%H%M}.csv",
-        mime="text/csv",
-        use_container_width=True,
-        disabled=record_count == 0,
-    )
-
-
-render_company_operation_entry()
-render_training_recorder()
 
 st.caption(
     "데모용 디지털 트윈입니다. 실제 설비 적용 전에는 현장 계측값과 제어 한계값으로 보정해야 합니다."
